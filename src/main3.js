@@ -34,7 +34,6 @@ let mouse = new THREE.Vector2(), lastMouse = new THREE.Vector2();
 let mouseState = false, lastMouseState = false;
 let lastCastPose = new THREE.Vector3();
 let material, rightClick = false;
-let undercutMesh = null; // undercut 시각화용 메쉬
 
 // Sculpt 파라미터 (대칭 관련 항목은 제거하고, sculpting 플래그 추가)
 const params = {
@@ -50,7 +49,6 @@ const params = {
   sculpting: false, // 스컬팅 기능 활성화 여부 (처음엔 false)
 };
 
-// matcaps
 const matcaps = {};
 
 // ----------------------------------------------------------------
@@ -72,32 +70,23 @@ function centerAndScaleGeometry( geometry ) {
 }
 
 // ----------------------------------------------------------------
-//    2) 모델 전체가 화면에 들어오도록 카메라와 컨트롤을 조정 (일종의 Bounds 기능)
+//    2) 모델 전체가 화면에 들어오도록 카메라와 컨트롤을 조정
 // ----------------------------------------------------------------
 function fitCameraToObject( camera, object, offset = 1.25 ) {
 
-  // object의 World Matrix가 최신 상태임을 보장
-  object.updateWorldMatrix( true, false );
-
-  // 바운딩 박스를 구함
+  object.updateWorldMatrix( true, false ); // 최신 WorldMatrix
   const box = new THREE.Box3().setFromObject( object );
   const center = box.getCenter( new THREE.Vector3() );
   const size = box.getSize( new THREE.Vector3() );
-
-  // 최대 치수를 구함
   const maxDim = Math.max( size.x, size.y, size.z );
 
-  // 카메라 fov는 degree이므로 라디안으로 변환
   const fov = camera.fov * ( Math.PI / 180 );
-  // 모델을 모두 담기 위한 Z 거리 (단순 근사)
   let cameraZ = maxDim / 2 / Math.tan( fov / 2 );
-  cameraZ *= offset; // 여유 공간
+  cameraZ *= offset;
 
-  // 모델 중심 좌표와 cameraZ를 이용해 카메라 위치 지정
   camera.position.set( center.x, center.y, center.z + cameraZ );
   camera.lookAt( center );
 
-  // OrbitControls가 있다면, target도 모델 중심에 맞춤
   if ( controls ) {
     controls.target.copy( center );
     controls.update();
@@ -106,7 +95,7 @@ function fitCameraToObject( camera, object, offset = 1.25 ) {
 }
 
 // ----------------------------------------------------------------
-//    STL 지오메트리 세팅 함수 (STL 업로드 시 호출)
+//    STL 지오메트리 세팅 함수
 // ----------------------------------------------------------------
 function setTargetMeshGeometry( geometry ) {
 
@@ -124,10 +113,10 @@ function setTargetMeshGeometry( geometry ) {
     bvhHelper = null;
   }
 
-  // (1) STL 지오메트리를 중심 정렬 및 스케일 정규화
+  // (1) 중심정렬 & 스케일정규화
   centerAndScaleGeometry( geometry );
 
-  // (2) 남은 작업들
+  // (2) 메쉬 정리
   geometry.deleteAttribute( 'uv' );
   geometry = BufferGeometryUtils.mergeVertices( geometry );
   geometry.computeVertexNormals();
@@ -135,45 +124,69 @@ function setTargetMeshGeometry( geometry ) {
   geometry.attributes.normal.setUsage( THREE.DynamicDrawUsage );
   geometry.computeBoundsTree( { setBoundingBox: false } );
 
-  // (3) 새 mesh 생성
+  // (3) vertexToFaceMap 생성 (자기 면 교차 무시용)
+  buildVertexToFaceMap( geometry );
+
+  // (4) 새로운 mesh 생성
   targetMesh = new THREE.Mesh( geometry, material );
   targetMesh.frustumCulled = false;
   scene.add( targetMesh );
 
-  // (4) BVH Helper (필요하면 다시 생성)
+  // (5) BVHHelper
   bvhHelper = new MeshBVHHelper( targetMesh, params.depth );
   if ( params.displayHelper ) {
     scene.add( bvhHelper );
   }
   bvhHelper.update();
 
-  // (5) 모델이 씬에 배치된 뒤 카메라와 컨트롤을 자동 조정
+  // (6) 카메라 조정
   fitCameraToObject( camera, targetMesh );
+
 }
 
 // ----------------------------------------------------------------
-//                     STL 로더 & 드래그 앤 드롭
+//  vertexToFaceMap 빌드 함수
+//  geometry.userData.vertexToFaceMap 에 저장
+// ----------------------------------------------------------------
+function buildVertexToFaceMap( geometry ) {
+  const indexAttr = geometry.index;
+  if ( ! indexAttr ) return;
+
+  const vertexCount = geometry.attributes.position.count;
+  const vertexToFaceMap = new Array( vertexCount );
+  for ( let i = 0; i < vertexCount; i ++ ) {
+    vertexToFaceMap[ i ] = [];
+  }
+
+  for ( let i = 0; i < indexAttr.count; i += 3 ) {
+    const faceIndex = i / 3; // face 단위
+    const a = indexAttr.getX( i );
+    const b = indexAttr.getX( i + 1 );
+    const c = indexAttr.getX( i + 2 );
+    vertexToFaceMap[ a ].push( faceIndex );
+    vertexToFaceMap[ b ].push( faceIndex );
+    vertexToFaceMap[ c ].push( faceIndex );
+  }
+
+  geometry.userData.vertexToFaceMap = vertexToFaceMap;
+}
+
+// ----------------------------------------------------------------
+//   STL 로더 & 드래그 앤 드롭
 // ----------------------------------------------------------------
 const stlLoader = new STLLoader();
 
-// 드래그 영역에 파일이 들어오면 기본 이벤트 취소
 window.addEventListener( 'dragover', e => {
   e.preventDefault();
 }, false );
 
-// 드롭 이벤트 발생 시 STL 파일 로드
 window.addEventListener( 'drop', e => {
-
   e.preventDefault();
 
   if ( e.dataTransfer.files && e.dataTransfer.files.length > 0 ) {
-
     const file = e.dataTransfer.files[ 0 ];
     const reader = new FileReader();
-
     reader.addEventListener( 'load', event => {
-
-      // arrayBuffer 받아 STL 파싱
       const arrayBuffer = event.target.result;
       const geometry = stlLoader.parse( arrayBuffer );
 
@@ -184,40 +197,32 @@ window.addEventListener( 'drop', e => {
       const positions = positionAttr.array; // Float32Array
 
       const indices = [];
-      // positions.length는 (정점 수 * 3) 이므로, 실제 정점 개수 = positions.length / 3
       for ( let i = 0; i < positions.length / 3; i += 3 ) {
         indices.push( i, i + 1, i + 2 );
       }
 
-      // 4) 새로운 BufferGeometry 생성
       let newGeometry = new THREE.BufferGeometry();
-
-      // position 어트리뷰트 등록 (3개씩 -> x, y, z)
       newGeometry.setAttribute(
         'position',
         new THREE.Float32BufferAttribute( positions, 3 )
       );
-
-      // 인덱스 설정
       newGeometry.setIndex(
         new THREE.Uint32BufferAttribute( indices, 1 )
       );
 
-      // STL 지오메트리 세팅 (정규화 + scene에 추가 + 카메라 조정)
+      // scene에 배치
       setTargetMeshGeometry( newGeometry );
 
     }, false );
-
-    // 바이너리 STL 읽기
     reader.readAsArrayBuffer( file );
   }
+
 }, false );
 
 // ----------------------------------------------------------------
-//        reset() : 현재 메쉬와 BVHHelper를 제거해 빈 상태로
+//         reset() : 현재 메쉬와 BVHHelper 제거
 // ----------------------------------------------------------------
 function reset() {
-
   if ( targetMesh ) {
     targetMesh.geometry.dispose();
     targetMesh.material.dispose();
@@ -229,104 +234,116 @@ function reset() {
     scene.remove( bvhHelper );
     bvhHelper = null;
   }
-  
-  // undercut 시각화 제거
-  if ( undercutMesh ) {
-    scene.remove( undercutMesh );
-    undercutMesh.geometry.dispose();
-    undercutMesh.material.dispose();
-    undercutMesh = null;
-  }
 }
 
 // ----------------------------------------------------------------
-//    undercut 감지 및 빨간색 시각화 함수 (카메라 기준으로 보이지 않는 면만)
+//  "언더컷 감지" 함수 (카메라 시점에서 보이지 않는 정점 빨갛게)
+//  - Epsilon 사용
+//  - 자기 자신 Face 교차 무시
 // ----------------------------------------------------------------
-function detectUndercuts() {
+let originalMaterial = null;
+function detectUndercut() {
   if ( !targetMesh ) return;
 
-  // 이전 undercut 시각화 제거
-  if ( undercutMesh ) {
-    scene.remove( undercutMesh );
-    undercutMesh.geometry.dispose();
-    undercutMesh.material.dispose();
-    undercutMesh = null;
+  // 한 번만 원본(Material) 백업
+  if ( !originalMaterial ) {
+    originalMaterial = targetMesh.material;
   }
 
-  // targetMesh의 월드 매트릭스 최신화
-  targetMesh.updateMatrixWorld( true );
   const geometry = targetMesh.geometry;
-  const posAttr = geometry.attributes.position;
-  const indexAttr = geometry.index;
+  // color 어트리뷰트가 없으면 생성
+  const vertexCount = geometry.attributes.position.count;
+  if ( ! geometry.attributes.color ) {
+    const colors = new Float32Array( vertexCount * 3 );
+    geometry.setAttribute( 'color', new THREE.BufferAttribute( colors, 3 ) );
+  }
+  const colorAttr = geometry.attributes.color;
 
-  const matrixWorld = targetMesh.matrixWorld;
-  const cameraPos = camera.position;
+  // BVH 없으면 다시 compute
+  if ( ! geometry.boundsTree ) {
+    geometry.computeBoundsTree( { setBoundingBox: false } );
+  }
 
-  const undercutPositions = [];
-  const undercutNormals = [];
+  const raycaster = new THREE.Raycaster();
+  raycaster.firstHitOnly = true;
 
-  // 각 삼각형 단위로 undercut 여부 판별
-  for ( let i = 0; i < indexAttr.count; i += 3 ) {
-    const aIndex = indexAttr.getX( i );
-    const bIndex = indexAttr.getX( i + 1 );
-    const cIndex = indexAttr.getX( i + 2 );
+  // 카메라 위치
+  const cameraPos = new THREE.Vector3().copy( camera.position );
 
-    const a = new THREE.Vector3().fromBufferAttribute( posAttr, aIndex ).applyMatrix4( matrixWorld );
-    const b = new THREE.Vector3().fromBufferAttribute( posAttr, bIndex ).applyMatrix4( matrixWorld );
-    const c = new THREE.Vector3().fromBufferAttribute( posAttr, cIndex ).applyMatrix4( matrixWorld );
+  const worldPos = new THREE.Vector3();
+  const vertexToFaceMap = geometry.userData.vertexToFaceMap;
+  const EPSILON = 0.001; // 오차 범위 (상황에 맞게 조절)
 
-    // 삼각형 중심 계산
-    const center = new THREE.Vector3().addVectors( a, b ).add( c ).divideScalar( 3 );
+  for ( let i = 0; i < vertexCount; i ++ ) {
+    // 정점 world 좌표
+    worldPos.fromBufferAttribute( geometry.attributes.position, i );
+    worldPos.applyMatrix4( targetMesh.matrixWorld );
 
-    // 월드공간에서 삼각형 면의 법선 계산
-    const ab = new THREE.Vector3().subVectors( b, a );
-    const ac = new THREE.Vector3().subVectors( c, a );
-    const normal = new THREE.Vector3().crossVectors( ab, ac ).normalize();
+    // 카메라 -> 정점 방향
+    const dir = new THREE.Vector3().subVectors( worldPos, cameraPos ).normalize();
 
-    // 카메라에서 삼각형 중심으로 향하는 벡터 (카메라에서 본 방향)
-    const viewVec = new THREE.Vector3().subVectors( cameraPos, center ).normalize();
+    raycaster.set( cameraPos, dir );
+    const intersects = raycaster.intersectObject( targetMesh, true );
 
-    // 삼각형이 카메라를 향하고 있으면 dot 값이 양수,
-    // 보이지 않는(후면) 경우에만 undercut으로 판정 (dot <= 0)
-    const dot = normal.dot( viewVec );
-    if ( dot <= 0.01 ) {
-      // undercut 삼각형이면 해당 정점들 추가 (중복 없이 시각화하기 위해 따로 geometry 생성)
-      undercutPositions.push( a.x, a.y, a.z );
-      undercutPositions.push( b.x, b.y, b.z );
-      undercutPositions.push( c.x, c.y, c.z );
+    // 자기 자신의 faceIndex는 무시
+    const facesOfThisVertex = vertexToFaceMap ? vertexToFaceMap[i] : null;
 
-      // 각 삼각형의 법선을 동일하게 적용
-      undercutNormals.push( normal.x, normal.y, normal.z );
-      undercutNormals.push( normal.x, normal.y, normal.z );
-      undercutNormals.push( normal.x, normal.y, normal.z );
+    let validHit = null;
+    for ( const intr of intersects ) {
+      // faceIndex가 undefined거나, 자기 자신의 faceIndex면 무시
+      if ( intr.faceIndex == null ) continue;
+      if ( facesOfThisVertex && facesOfThisVertex.includes( intr.faceIndex ) ) {
+        // 자기 자신 면 => 무시
+        continue;
+      }
+      validHit = intr;
+      break;
+    }
+
+    if ( validHit ) {
+      const dist = validHit.distance;
+      const realDist = cameraPos.distanceTo( worldPos );
+      // Epsilon 범위 이내면 "보이는 정점"
+      if ( Math.abs( dist - realDist ) < EPSILON ) {
+        // 흰색
+        colorAttr.setXYZ( i, 1, 1, 1 );
+      } else {
+        // 빨간색
+        colorAttr.setXYZ( i, 1, 0, 0 );
+      }
+    } else {
+      // 교차가 전혀 없는 경우 => 보이는 것으로 간주 (흰색)
+      colorAttr.setXYZ( i, 1, 1, 1 );
     }
   }
 
-  // undercut 시각화용 BufferGeometry 생성
-  const undercutGeometry = new THREE.BufferGeometry();
-  undercutGeometry.setAttribute( 'position', new THREE.Float32BufferAttribute( undercutPositions, 3 ) );
-  undercutGeometry.setAttribute( 'normal', new THREE.Float32BufferAttribute( undercutNormals, 3 ) );
+  colorAttr.needsUpdate = true;
 
-  // 빨간색, 반투명 MeshBasicMaterial 사용 (양면 렌더링)
-  const redMaterial = new THREE.MeshBasicMaterial({
-    color: 0xff0000,
-    side: THREE.DoubleSide,
-    transparent: true,
-    opacity: 0.5
+  // 눈에 보이도록 vertexColors가 적용된 재질
+  targetMesh.material = new THREE.MeshLambertMaterial({
+    vertexColors: true,
+    side: THREE.DoubleSide
   });
 
-  undercutMesh = new THREE.Mesh( undercutGeometry, redMaterial );
-  scene.add( undercutMesh );
 }
 
 // ----------------------------------------------------------------
-//                       초기화 함수
+//  재질 복원
+// ----------------------------------------------------------------
+function restoreMaterial() {
+  if ( targetMesh && originalMaterial ) {
+    targetMesh.material = originalMaterial;
+    targetMesh.material.needsUpdate = true;
+  }
+}
+
+// ----------------------------------------------------------------
+//  초기화 함수
 // ----------------------------------------------------------------
 function init() {
 
   const bgColor = 0x060609;
 
-  // renderer
   renderer = new THREE.WebGLRenderer( { antialias: true } );
   renderer.setPixelRatio( window.devicePixelRatio );
   renderer.setSize( window.innerWidth, window.innerHeight );
@@ -335,7 +352,6 @@ function init() {
   document.body.appendChild( renderer.domElement );
   renderer.domElement.style.touchAction = 'none';
 
-  // scene
   scene = new THREE.Scene();
   scene.fog = new THREE.Fog( 0x263238 / 2, 20, 60 );
 
@@ -359,13 +375,11 @@ function init() {
       new THREE.Vector3( x2, y2, 0 )
     );
   }
-
   brush = new THREE.LineSegments();
   brush.geometry.setFromPoints( brushSegments );
   brush.material.color.set( 0xfb8c00 );
   scene.add( brush );
 
-  // camera
   camera = new THREE.PerspectiveCamera(
     75, window.innerWidth / window.innerHeight, 0.1, 50
   );
@@ -373,11 +387,9 @@ function init() {
   camera.far = 100;
   camera.updateProjectionMatrix();
 
-  // stats
   stats = new Stats();
   document.body.appendChild( stats.dom );
 
-  // matcaps
   matcaps[ 'Clay' ] = new THREE.TextureLoader().load( 'textures/B67F6B_4B2E2A_6C3A34_F3DBC6-256px.png' );
   matcaps[ 'Red Wax' ] = new THREE.TextureLoader().load( 'textures/763C39_431510_210504_55241C-256px.png' );
   matcaps[ 'Shiny Green' ] = new THREE.TextureLoader().load( 'textures/3B6E10_E3F2C3_88AC2E_99CE51-256px.png' );
@@ -392,14 +404,12 @@ function init() {
     matcaps[ key ].encoding = THREE.sRGBEncoding;
   }
 
-  // 초기에는 빈 상태 (reset() 호출 X)
-
   // GUI
   const gui = new dat.GUI();
+
   gui.add( params, 'matcap', Object.keys( matcaps ) );
 
   const sculptFolder = gui.addFolder( 'Sculpting' );
-  // sculpting 기능 체크박스 (초기 false)
   sculptFolder.add( params, 'sculpting' ).name('Sculpting');
   sculptFolder.add( params, 'brush', [ 'normal', 'clay', 'flatten' ] );
   sculptFolder.add( params, 'size', 0.025, 0.25, 0.005 );
@@ -432,16 +442,20 @@ function init() {
   } );
   helperFolder.open();
 
-  gui.add( { reset }, 'reset' );
-  gui.add( { rebuildBVH: () => {
-    if ( targetMesh ) {
-      targetMesh.geometry.computeBoundsTree( { setBoundingBox: false } );
-      if ( bvhHelper ) bvhHelper.update();
-    }
-  } }, 'rebuildBVH' );
+  // Undercut 감지 관련
+  gui.add( { detectUndercut }, 'detectUndercut' ).name('Undercut 감지');
+  gui.add( { restoreMaterial }, 'restoreMaterial' ).name('재질 복원');
 
-  // undercut 감지 버튼 추가
-  gui.add( { detectUndercuts }, 'detectUndercuts' ).name("Detect Undercuts");
+  gui.add( { reset }, 'reset' ).name('Reset Model');
+  gui.add( {
+    rebuildBVH: () => {
+      if ( targetMesh ) {
+        targetMesh.geometry.computeBoundsTree( { setBoundingBox: false } );
+        if ( bvhHelper ) bvhHelper.update();
+      }
+    }
+  }, 'rebuildBVH' ).name('Rebuild BVH');
+
   gui.open();
 
   // 이벤트 리스너
@@ -505,7 +519,6 @@ function init() {
   controls.addEventListener( 'start', function () {
     this.active = true;
   } );
-
   controls.addEventListener( 'end', function () {
     this.active = false;
   } );
@@ -513,11 +526,10 @@ function init() {
 }
 
 // ----------------------------------------------------------------
-//                     브러시 수행 함수
+//  브러시 수행 함수 (기존 코드를 그대로 유지)
 // ----------------------------------------------------------------
 function performStroke( point, brushObject, brushOnly = false, accumulatedFields = {} ) {
-
-  if ( !targetMesh ) return; // 메쉬가 없으면 스컬팅 불가
+  if ( !targetMesh ) return;
 
   const {
     accumulatedTriangles = new Set(),
@@ -544,12 +556,11 @@ function performStroke( point, brushObject, brushOnly = false, accumulatedFields
   bvh?.shapecast( {
 
     intersectsBounds: ( box, isLeaf, score, depth, nodeIndex ) => {
-
       accumulatedTraversedNodeIndices.add( nodeIndex );
-
       const intersects = sphere.intersectsBox( box );
       const { min, max } = box;
       if ( intersects ) {
+        // 완전히 포함?
         for ( let x = 0; x <= 1; x ++ ) {
           for ( let y = 0; y <= 1; y ++ ) {
             for ( let z = 0; z <= 1; z ++ ) {
@@ -567,11 +578,9 @@ function performStroke( point, brushObject, brushOnly = false, accumulatedFields
         return CONTAINED;
       }
       return intersects ? INTERSECTED : NOT_INTERSECTED;
-
     },
 
     intersectsTriangle: ( tri, index, contained ) => {
-
       const triIndex = index;
       triangles.add( triIndex );
       accumulatedTriangles.add( triIndex );
@@ -583,14 +592,10 @@ function performStroke( point, brushObject, brushOnly = false, accumulatedFields
       const va = indexAttr.getX( a );
       const vb = indexAttr.getX( b );
       const vc = indexAttr.getX( c );
-      if ( contained ) {
-        indices.add( va );
-        indices.add( vb );
-        indices.add( vc );
 
-        accumulatedIndices.add( va );
-        accumulatedIndices.add( vb );
-        accumulatedIndices.add( vc );
+      if ( contained ) {
+        indices.add( va ); indices.add( vb ); indices.add( vc );
+        accumulatedIndices.add( va ); accumulatedIndices.add( vb ); accumulatedIndices.add( vc );
       } else {
         if ( sphere.containsPoint( tri.a ) ) {
           indices.add( va );
@@ -605,9 +610,7 @@ function performStroke( point, brushObject, brushOnly = false, accumulatedFields
           accumulatedIndices.add( vc );
         }
       }
-
       return false;
-
     }
 
   } );
@@ -618,13 +621,12 @@ function performStroke( point, brushObject, brushOnly = false, accumulatedFields
 
   const planePoint = new THREE.Vector3();
   let totalPoints = 0;
-  indices.forEach( index => {
-    tempVec.fromBufferAttribute( normalAttr, index );
+  indices.forEach( idx => {
+    tempVec.fromBufferAttribute( normalAttr, idx );
     normal.add( tempVec );
-
     if ( ! brushOnly ) {
       totalPoints ++;
-      tempVec.fromBufferAttribute( posAttr, index );
+      tempVec.fromBufferAttribute( posAttr, idx );
       planePoint.add( tempVec );
     }
   } );
@@ -635,18 +637,15 @@ function performStroke( point, brushObject, brushOnly = false, accumulatedFields
     planePoint.multiplyScalar( 1 / totalPoints );
   }
 
-  // 브러시 위치만 갱신할 경우
-  if ( brushOnly ) {
-    return;
-  }
+  // 브러시 위치만 갱신
+  if ( brushOnly ) return;
 
   const targetHeight = params.intensity * 0.0001;
   const plane = new THREE.Plane();
   plane.setFromNormalAndCoplanarPoint( normal, planePoint );
 
-  indices.forEach( index => {
-    tempVec.fromBufferAttribute( posAttr, index );
-
+  indices.forEach( idx => {
+    tempVec.fromBufferAttribute( posAttr, idx );
     const dist = tempVec.distanceTo( localPoint );
     const negated = params.invert !== rightClick ? -1 : 1;
     let intensity = 1.0 - ( dist / params.size );
@@ -671,19 +670,17 @@ function performStroke( point, brushObject, brushOnly = false, accumulatedFields
       );
     }
 
-    posAttr.setXYZ( index, tempVec.x, tempVec.y, tempVec.z );
-    normalAttr.setXYZ( index, 0, 0, 0 );
-
+    posAttr.setXYZ( idx, tempVec.x, tempVec.y, tempVec.z );
+    normalAttr.setXYZ( idx, 0, 0, 0 );
   } );
 
   if ( indices.size ) {
     posAttr.needsUpdate = true;
   }
-
 }
 
 // ----------------------------------------------------------------
-//                     노멀 업데이트 함수
+//  노멀 업데이트 함수
 // ----------------------------------------------------------------
 function updateNormals( triangles, indices ) {
 
@@ -730,10 +727,10 @@ function updateNormals( triangles, indices ) {
   } );
 
   // 노멀 정규화
-  indices.forEach( index => {
-    tempVec.fromBufferAttribute( normalAttr, index );
+  indices.forEach( idx => {
+    tempVec.fromBufferAttribute( normalAttr, idx );
     tempVec.normalize();
-    normalAttr.setXYZ( index, tempVec.x, tempVec.y, tempVec.z );
+    normalAttr.setXYZ( idx, tempVec.x, tempVec.y, tempVec.z );
   } );
 
   normalAttr.needsUpdate = true;
@@ -741,33 +738,29 @@ function updateNormals( triangles, indices ) {
 }
 
 // ----------------------------------------------------------------
-//                       렌더 루프
+//  렌더 루프
 // ----------------------------------------------------------------
 function render() {
-
   requestAnimationFrame( render );
   stats.begin();
 
   material.matcap = matcaps[ params.matcap ];
 
-  // 스컬팅 로직: sculpting 플래그가 false이거나 컨트롤/브러시 활성 상태가 아니면 스컬팅 동작 중지
+  // 스컬팅 로직
   if ( !params.sculpting || controls.active || !brushActive || !targetMesh ) {
     brush.visible = false;
     lastCastPose.setScalar( Infinity );
     controls.enabled = true;
   } else {
-
     const raycaster = new THREE.Raycaster();
     raycaster.setFromCamera( mouse, camera );
     raycaster.firstHitOnly = true;
 
     const hit = raycaster.intersectObject( targetMesh, true )[ 0 ];
     if ( hit ) {
-
       brush.visible = true;
       brush.scale.set( params.size, params.size, 0.1 );
       brush.position.copy( hit.point );
-
       controls.enabled = false;
 
       if ( lastCastPose.x === Infinity ) {
@@ -775,12 +768,12 @@ function render() {
       }
 
       if ( ! ( mouseState || lastMouseState ) ) {
-        // 클릭하지 않은 경우: 브러시 위치만 갱신
+        // 클릭 안 한 상태: 브러시 위치만
         performStroke( hit.point, brush, true );
         lastMouse.copy( mouse );
         lastCastPose.copy( hit.point );
       } else {
-        // 마우스 이동 및 raycast 위치 차이에 따른 여러 스텝 적용
+        // 마우스 이동 거리에 따라 여러 번 스컬팅
         const mdx = ( mouse.x - lastMouse.x ) * window.innerWidth * window.devicePixelRatio;
         const mdy = ( mouse.y - lastMouse.y ) * window.innerHeight * window.devicePixelRatio;
         let mdist = Math.sqrt( mdx * mdx + mdy * mdy );
@@ -817,25 +810,20 @@ function render() {
         if ( stepCount > 0 ) {
           updateNormals( changedTriangles, changedIndices );
           targetMesh.geometry.boundsTree?.refit( traversedNodeIndices );
-
           if ( bvhHelper && bvhHelper.parent !== null ) {
             bvhHelper.update();
           }
-
         } else {
-          // 움직임이 너무 작으면 단순히 브러시 위치만 갱신
           performStroke( hit.point, brush, true );
         }
 
       }
 
     } else {
-
       controls.enabled = true;
       brush.visible = false;
       lastMouse.copy( mouse );
       lastCastPose.setScalar( Infinity );
-
     }
 
   }
@@ -844,11 +832,10 @@ function render() {
 
   renderer.render( scene, camera );
   stats.end();
-
 }
 
 // ----------------------------------------------------------------
-//                      실행(초기화 + 루프)
+//  실행(초기화 + 루프)
 // ----------------------------------------------------------------
 init();
 render();
