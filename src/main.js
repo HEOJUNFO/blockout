@@ -27,7 +27,7 @@ THREE.BufferGeometry.prototype.disposeBoundsTree = disposeBoundsTree;
 let stats;
 let scene, camera, renderer, controls;
 let targetMesh = null;
-let brush, symmetryBrush, bvhHelper;
+let brush, bvhHelper;
 let normalZ = new THREE.Vector3( 0, 0, 1 );
 let brushActive = false;
 let mouse = new THREE.Vector2(), lastMouse = new THREE.Vector2();
@@ -35,20 +35,18 @@ let mouseState = false, lastMouseState = false;
 let lastCastPose = new THREE.Vector3();
 let material, rightClick = false;
 
-// Sculpt 파라미터
+// Sculpt 파라미터 (대칭 관련 항목은 제거하고, sculpting 플래그 추가)
 const params = {
   matcap: 'Clay',
-
-  size: 0.1,
+  size: 0.01,
   brush: 'clay',
-  intensity: 50,
+  intensity: 10,
   maxSteps: 10,
   invert: false,
-  symmetrical: true,
   flatShading: false,
-
   depth: 10,
   displayHelper: false,
+  sculpting: false, // 스컬팅 기능 활성화 여부 (처음엔 false)
 };
 
 const matcaps = {};
@@ -256,9 +254,6 @@ function init() {
   brush.material.color.set( 0xfb8c00 );
   scene.add( brush );
 
-  symmetryBrush = brush.clone();
-  scene.add( symmetryBrush );
-
   // camera
   camera = new THREE.PerspectiveCamera(
     75, window.innerWidth / window.innerHeight, 0.1, 50
@@ -292,11 +287,12 @@ function init() {
   gui.add( params, 'matcap', Object.keys( matcaps ) );
 
   const sculptFolder = gui.addFolder( 'Sculpting' );
+  // sculpting 기능 체크박스 (초기 false)
+  sculptFolder.add( params, 'sculpting' ).name('Sculpting');
   sculptFolder.add( params, 'brush', [ 'normal', 'clay', 'flatten' ] );
   sculptFolder.add( params, 'size', 0.025, 0.25, 0.005 );
   sculptFolder.add( params, 'intensity', 1, 100, 1 );
   sculptFolder.add( params, 'maxSteps', 1, 25, 1 );
-  sculptFolder.add( params, 'symmetrical' );
   sculptFolder.add( params, 'invert' );
   sculptFolder.add( params, 'flatShading' ).onChange( value => {
     if ( targetMesh ) {
@@ -639,13 +635,11 @@ function render() {
 
   material.matcap = matcaps[ params.matcap ];
 
-  // 스컬팅 로직
-  if ( controls.active || ! brushActive || ! targetMesh ) {
-
+  // 스컬팅 로직: sculpting 플래그가 false이거나 컨트롤/브러시 활성 상태가 아니면 스컬팅 동작 중지
+  if ( !params.sculpting || controls.active || !brushActive || !targetMesh ) {
     brush.visible = false;
-    symmetryBrush.visible = false;
     lastCastPose.setScalar( Infinity );
-
+    controls.enabled = true;
   } else {
 
     const raycaster = new THREE.Raycaster();
@@ -659,11 +653,6 @@ function render() {
       brush.scale.set( params.size, params.size, 0.1 );
       brush.position.copy( hit.point );
 
-      symmetryBrush.visible = params.symmetrical;
-      symmetryBrush.scale.set( params.size, params.size, 0.1 );
-      symmetryBrush.position.copy( hit.point );
-      symmetryBrush.position.x *= -1;
-
       controls.enabled = false;
 
       if ( lastCastPose.x === Infinity ) {
@@ -671,18 +660,12 @@ function render() {
       }
 
       if ( ! ( mouseState || lastMouseState ) ) {
-        // 클릭 안 했으면 -> 브러시 위치만 갱신
+        // 클릭하지 않은 경우: 브러시 위치만 갱신
         performStroke( hit.point, brush, true );
-        if ( params.symmetrical ) {
-          hit.point.x *= -1;
-          performStroke( hit.point, symmetryBrush, true );
-          hit.point.x *= -1;
-        }
         lastMouse.copy( mouse );
         lastCastPose.copy( hit.point );
-
       } else {
-        // 마우스 이동 거리 / raycast 위치 차이
+        // 마우스 이동 및 raycast 위치 차이에 따른 여러 스텝 적용
         const mdx = ( mouse.x - lastMouse.x ) * window.innerWidth * window.devicePixelRatio;
         const mdy = ( mouse.y - lastMouse.y ) * window.innerHeight * window.devicePixelRatio;
         let mdist = Math.sqrt( mdx * mdx + mdy * mdy );
@@ -709,11 +692,6 @@ function render() {
           mdist -= mstep;
 
           performStroke( lastCastPose, brush, false, sets );
-          if ( params.symmetrical ) {
-            lastCastPose.x *= -1;
-            performStroke( lastCastPose, symmetryBrush, false, sets );
-            lastCastPose.x *= -1;
-          }
 
           stepCount ++;
           if ( stepCount > params.maxSteps ) {
@@ -730,13 +708,8 @@ function render() {
           }
 
         } else {
-          // 움직임이 너무 작다면 브러시 위치만 갱신
+          // 움직임이 너무 작으면 단순히 브러시 위치만 갱신
           performStroke( hit.point, brush, true );
-          if ( params.symmetrical ) {
-            hit.point.x *= -1;
-            performStroke( hit.point, symmetryBrush, true );
-            hit.point.x *= -1;
-          }
         }
 
       }
@@ -745,7 +718,6 @@ function render() {
 
       controls.enabled = true;
       brush.visible = false;
-      symmetryBrush.visible = false;
       lastMouse.copy( mouse );
       lastCastPose.setScalar( Infinity );
 
@@ -765,4 +737,3 @@ function render() {
 // ----------------------------------------------------------------
 init();
 render();
-
