@@ -123,7 +123,6 @@ function detectUndercuts() {
     scene.add( undercutMesh );
   }
 
-// 블록아웃 기능 (언더컷 보강)
 function applyBlockout() {
 
 }
