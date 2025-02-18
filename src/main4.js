@@ -13,6 +13,7 @@ THREE.BufferGeometry.prototype.disposeBoundsTree = disposeBoundsTree;
 
 let stats, scene, camera, renderer, controls;
 let targetMesh = null;
+let undercutMesh = null; 
 let blockoutMesh = null;
 let material;
 
@@ -48,41 +49,81 @@ function setTargetMeshGeometry(geometry) {
 
 // 언더컷 감지 기능
 function detectUndercuts() {
-  if (!targetMesh) return;
+    if ( !targetMesh ) return;
   
-  targetMesh.updateMatrixWorld(true);
-  const geometry = targetMesh.geometry;
-  const posAttr = geometry.attributes.position;
-  const indexAttr = geometry.index;
-  const cameraPos = camera.position;
-  
-  const undercutPositions = [];
-  for (let i = 0; i < indexAttr.count; i += 3) {
-    const aIndex = indexAttr.getX(i);
-    const bIndex = indexAttr.getX(i + 1);
-    const cIndex = indexAttr.getX(i + 2);
-    
-    const a = new THREE.Vector3().fromBufferAttribute(posAttr, aIndex).applyMatrix4(targetMesh.matrixWorld);
-    const b = new THREE.Vector3().fromBufferAttribute(posAttr, bIndex).applyMatrix4(targetMesh.matrixWorld);
-    const c = new THREE.Vector3().fromBufferAttribute(posAttr, cIndex).applyMatrix4(targetMesh.matrixWorld);
-    
-    const center = new THREE.Vector3().addVectors(a, b).add(c).divideScalar(3);
-    const normal = new THREE.Vector3().crossVectors(b.clone().sub(a), c.clone().sub(a)).normalize();
-    const viewVec = new THREE.Vector3().subVectors(cameraPos, center).normalize();
-    
-    if (normal.dot(viewVec) <= 0.01) {
-      undercutPositions.push(a.x, a.y, a.z, b.x, b.y, b.z, c.x, c.y, c.z);
+    // 이전 undercut 시각화 제거
+    if ( undercutMesh ) {
+      scene.remove( undercutMesh );
+      undercutMesh.geometry.dispose();
+      undercutMesh.material.dispose();
+      undercutMesh = null;
     }
-  }
-
-  if (undercutPositions.length > 0) {
+  
+    // targetMesh의 월드 매트릭스 최신화
+    targetMesh.updateMatrixWorld( true );
+    const geometry = targetMesh.geometry;
+    const posAttr = geometry.attributes.position;
+    const indexAttr = geometry.index;
+  
+    const matrixWorld = targetMesh.matrixWorld;
+    const cameraPos = camera.position;
+  
+    const undercutPositions = [];
+    const undercutNormals = [];
+  
+    // 각 삼각형 단위로 undercut 여부 판별
+    for ( let i = 0; i < indexAttr.count; i += 3 ) {
+      const aIndex = indexAttr.getX( i );
+      const bIndex = indexAttr.getX( i + 1 );
+      const cIndex = indexAttr.getX( i + 2 );
+  
+      const a = new THREE.Vector3().fromBufferAttribute( posAttr, aIndex ).applyMatrix4( matrixWorld );
+      const b = new THREE.Vector3().fromBufferAttribute( posAttr, bIndex ).applyMatrix4( matrixWorld );
+      const c = new THREE.Vector3().fromBufferAttribute( posAttr, cIndex ).applyMatrix4( matrixWorld );
+  
+      // 삼각형 중심 계산
+      const center = new THREE.Vector3().addVectors( a, b ).add( c ).divideScalar( 3 );
+  
+      // 월드공간에서 삼각형 면의 법선 계산
+      const ab = new THREE.Vector3().subVectors( b, a );
+      const ac = new THREE.Vector3().subVectors( c, a );
+      const normal = new THREE.Vector3().crossVectors( ab, ac ).normalize();
+  
+      // 카메라에서 삼각형 중심으로 향하는 벡터 (카메라에서 본 방향)
+      const viewVec = new THREE.Vector3().subVectors( cameraPos, center ).normalize();
+  
+      // 삼각형이 카메라를 향하고 있으면 dot 값이 양수,
+      // 보이지 않는(후면) 경우에만 undercut으로 판정 (dot <= 0)
+      const dot = normal.dot( viewVec );
+      if ( dot <= 0.01 ) {
+        // undercut 삼각형이면 해당 정점들 추가 (중복 없이 시각화하기 위해 따로 geometry 생성)
+        undercutPositions.push( a.x, a.y, a.z );
+        undercutPositions.push( b.x, b.y, b.z );
+        undercutPositions.push( c.x, c.y, c.z );
+  
+        // 각 삼각형의 법선을 동일하게 적용
+        undercutNormals.push( normal.x, normal.y, normal.z );
+        undercutNormals.push( normal.x, normal.y, normal.z );
+        undercutNormals.push( normal.x, normal.y, normal.z );
+      }
+    }
+  
+    // undercut 시각화용 BufferGeometry 생성
     const undercutGeometry = new THREE.BufferGeometry();
-    undercutGeometry.setAttribute('position', new THREE.Float32BufferAttribute(undercutPositions, 3));
-    const redMaterial = new THREE.MeshBasicMaterial({ color: 0xff0000, side: THREE.DoubleSide, transparent: true, opacity: 0.5 });
-    const undercutMesh = new THREE.Mesh(undercutGeometry, redMaterial);
-    scene.add(undercutMesh);
+    undercutGeometry.setAttribute( 'position', new THREE.Float32BufferAttribute( undercutPositions, 3 ) );
+    undercutGeometry.setAttribute( 'normal', new THREE.Float32BufferAttribute( undercutNormals, 3 ) );
+  
+    // 빨간색, 반투명 MeshBasicMaterial 사용 (양면 렌더링)
+    const redMaterial = new THREE.MeshBasicMaterial({
+      color: 0xff0000,
+      side: THREE.DoubleSide,
+      transparent: true,
+      opacity: 0.5
+    });
+  
+    undercutMesh = new THREE.Mesh( undercutGeometry, redMaterial );
+    scene.add( undercutMesh );
   }
-}
 
 // 블록아웃 기능 (언더컷 보강)
 function applyBlockout() {
@@ -131,8 +172,8 @@ function init() {
   stats = new Stats();
   document.body.appendChild(stats.dom);
   
-  gui.add(params, 'detectUndercuts').name('Detect Undercuts')
-  gui.add(params, 'blockout').name('Apply Blockout')
+  gui.add( { detectUndercuts }, 'detectUndercuts' ).name("Detect Undercuts");
+  gui.add( { applyBlockout }, 'applyBlockout' ).name("Apply Blockout");
   
   window.addEventListener('resize', () => {
     camera.aspect = window.innerWidth / window.innerHeight;
