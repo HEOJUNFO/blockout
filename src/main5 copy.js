@@ -13,6 +13,7 @@ THREE.BufferGeometry.prototype.disposeBoundsTree = disposeBoundsTree;
 let stats, scene, camera, renderer, controls;
 let targetMesh = null;
 let undercutMesh = null; 
+let blockoutMesh = null;
 let material;
 
 const params = {
@@ -123,6 +124,91 @@ function detectUndercuts() {
     scene.add( undercutMesh );
   }
 
+  function applyBlockoutToTargetMesh() {
+    if (!targetMesh) return;
+    
+    targetMesh.updateMatrixWorld(true);
+    const geometry = targetMesh.geometry;
+    const posAttr = geometry.attributes.position;
+    const indexAttr = geometry.index;
+    const matrixWorld = targetMesh.matrixWorld;
+    const cameraPos = camera.position;
+    
+    const offsetDistance = 0.05; // 원하는 오프셋 거리
+    
+    // 각 정점에 대해 누적 offset과 적용 횟수를 저장할 객체를 만듭니다.
+    const offsets = new Array(posAttr.count).fill(0).map(() => new THREE.Vector3());
+    const counts = new Array(posAttr.count).fill(0);
+    
+    // 각 삼각형 단위로 undercut 여부를 판별하고, 해당 삼각형의 정점에 offset 벡터를 누적합니다.
+    for (let i = 0; i < indexAttr.count; i += 3) {
+      const aIndex = indexAttr.getX(i);
+      const bIndex = indexAttr.getX(i + 1);
+      const cIndex = indexAttr.getX(i + 2);
+      
+      // 정점의 world 좌표 계산
+      const a = new THREE.Vector3().fromBufferAttribute(posAttr, aIndex).applyMatrix4(matrixWorld);
+      const b = new THREE.Vector3().fromBufferAttribute(posAttr, bIndex).applyMatrix4(matrixWorld);
+      const c = new THREE.Vector3().fromBufferAttribute(posAttr, cIndex).applyMatrix4(matrixWorld);
+      
+      // 삼각형 중심과 면의 법선 계산
+      const center = new THREE.Vector3().addVectors(a, b).add(c).divideScalar(3);
+      const ab = new THREE.Vector3().subVectors(b, a);
+      const ac = new THREE.Vector3().subVectors(c, a);
+      const normal = new THREE.Vector3().crossVectors(ab, ac).normalize();
+      
+      // 카메라 방향 벡터 (삼각형 중심에서 카메라로 향하는 방향)
+      const viewVec = new THREE.Vector3().subVectors(cameraPos, center).normalize();
+      
+      // 삼각형이 카메라를 향하지 않으면(후면이면) undercut으로 판단합니다.
+      if (normal.dot(viewVec) <= 0.01) {
+        // 삼각형마다 offset 방향을 계산합니다.
+        // (이전 예제에서는 카메라 방향 성분을 제거한 벡터를 사용)
+        const cameraDir = new THREE.Vector3();
+        camera.getWorldDirection(cameraDir).normalize();
+        const dot = normal.dot(cameraDir);
+        let projected = normal.clone().sub(cameraDir.clone().multiplyScalar(dot));
+        if (projected.lengthSq() > 0.0001) {
+          projected.normalize();
+        } else {
+          projected.copy(normal).normalize();
+        }
+        projected.multiplyScalar(offsetDistance);
+        
+        // 해당 삼각형의 각 정점에 offset 기여를 누적
+        offsets[aIndex].add(projected);
+        offsets[bIndex].add(projected);
+        offsets[cIndex].add(projected);
+        
+        counts[aIndex]++;
+        counts[bIndex]++;
+        counts[cIndex]++;
+      }
+    }
+    
+    // targetMesh의 로컬 좌표계에서 offset을 적용하기 위해, world -> local 변환 행렬 계산
+    const invMatrix = new THREE.Matrix4().copy(targetMesh.matrixWorld).invert();
+    
+    // 누적된 offset 값을 각 정점에 평균내어 적용
+    for (let i = 0; i < posAttr.count; i++) {
+      if (counts[i] > 0) {
+        // 평균 offset 계산 (world 좌표계)
+        offsets[i].multiplyScalar(1 / counts[i]);
+        // 로컬 좌표로 변환 (회전 성분만 적용)
+        offsets[i].applyMatrix4(invMatrix);
+        
+        // 기존 정점 위치에 offset 적용
+        const x = posAttr.getX(i);
+        const y = posAttr.getY(i);
+        const z = posAttr.getZ(i);
+        posAttr.setXYZ(i, x + offsets[i].x, y + offsets[i].y, z + offsets[i].z);
+      }
+    }
+    
+    posAttr.needsUpdate = true;
+    geometry.computeVertexNormals();
+  }
+
   function applyBlockoutExtrude() {
     if (!targetMesh) return;
     targetMesh.updateMatrixWorld(true);
@@ -191,7 +277,7 @@ function detectUndercuts() {
     const vertexCounts = {};
     const cameraDir = new THREE.Vector3();
     camera.getWorldDirection(cameraDir).normalize();
-    const offsetDistance = 0.001;
+    const offsetDistance = 0.05;
     for (let t = 0; t < triangleCount; t++) {
       if (undercutTriangles[t]) {
         const i0 = indices[t * 3], i1 = indices[t * 3 + 1], i2 = indices[t * 3 + 2];
@@ -339,6 +425,7 @@ function init() {
   document.body.appendChild(stats.dom);
   
   gui.add( { detectUndercuts }, 'detectUndercuts' ).name("Detect Undercuts");
+  gui.add( { applyBlockoutToTargetMesh}, 'applyBlockoutToTargetMesh' ).name("Apply Blockout");
   gui.add({ applyBlockoutExtrude }, 'applyBlockoutExtrude').name("Apply Extrude Blockout");
 
   

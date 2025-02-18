@@ -14,6 +14,7 @@ let stats, scene, camera, renderer, controls;
 let targetMesh = null;
 let undercutMesh = null; 
 let material;
+let blockoutMesh = null;
 
 const params = {
   matcap: 'Clay',
@@ -122,10 +123,103 @@ function detectUndercuts() {
     undercutMesh = new THREE.Mesh( undercutGeometry, redMaterial );
     scene.add( undercutMesh );
   }
+  
 
-function applyBlockout() {
+  // 두 Mesh를 합쳐서 targetMesh를 업데이트하는 함수
+  function mergeTargetAndBlockout() {
+    if (!targetMesh || !blockoutMesh) return;
+  
+    // targetMesh와 blockoutMesh의 geometry를 non-indexed 형태로 변환
+    const geom1 = targetMesh.geometry.index !== null ? targetMesh.geometry.toNonIndexed() : targetMesh.geometry;
+    const geom2 = blockoutMesh.geometry.index !== null ? blockoutMesh.geometry.toNonIndexed() : blockoutMesh.geometry;
+  
+    // 최신 mergeGeometries() 사용 (두 기하체의 속성이 호환되어야 함)
+    const mergedGeometry = BufferGeometryUtils.mergeGeometries([geom1, geom2], false);
+    if (!mergedGeometry) {
+      console.error("Geometry 병합에 실패했습니다.");
+      return;
+    }
+    
+    mergedGeometry.computeVertexNormals();
+  
+    // 기존 Mesh 제거 및 메모리 해제
+    scene.remove(targetMesh);
+    scene.remove(blockoutMesh);
+    targetMesh.geometry.dispose();
+    blockoutMesh.geometry.dispose();
+  
+    // 병합된 geometry로 새로운 targetMesh 생성 및 추가
+    targetMesh = new THREE.Mesh(mergedGeometry, material);
+    scene.add(targetMesh);
+  
+    // blockoutMesh는 이제 필요 없으므로 null 처리
+    blockoutMesh = null;
+  }
+  
+ 
 
-}
+  function applyBlockout() {
+    if (!undercutMesh) return;
+  
+    const offsetDistance = 0.05; // 원하는 오프셋 거리 (필요에 따라 조절)
+    // undercutMesh의 geometry 복사 (원본은 유지)
+    const geometry = undercutMesh.geometry.clone();
+    const posAttr = geometry.attributes.position;
+    const normAttr = geometry.attributes.normal;
+  
+    // 카메라의 정면 방향 계산
+    const cameraDir = new THREE.Vector3();
+    camera.getWorldDirection(cameraDir).normalize();
+  
+    // 각 정점에 대해 오프셋 적용
+    for (let i = 0; i < posAttr.count; i++) {
+      // 정점의 법선 읽기
+      const normal = new THREE.Vector3(
+        normAttr.getX(i),
+        normAttr.getY(i),
+        normAttr.getZ(i)
+      );
+      // 카메라 방향과의 내적을 빼서, 카메라 방향에 수직인 성분만 남김
+      const dot = normal.dot(cameraDir);
+      const projected = normal.clone().sub(cameraDir.clone().multiplyScalar(dot));
+      // 투영된 벡터의 길이가 0에 가깝다면 원래 법선을 사용
+      if (projected.lengthSq() > 0.0001) {
+        projected.normalize();
+      } else {
+        projected.copy(normal).normalize();
+      }
+      // 현재 정점 위치에 오프셋 추가
+      const pos = new THREE.Vector3(
+        posAttr.getX(i),
+        posAttr.getY(i),
+        posAttr.getZ(i)
+      );
+      pos.add(projected.multiplyScalar(offsetDistance));
+      posAttr.setXYZ(i, pos.x, pos.y, pos.z);
+    }
+    posAttr.needsUpdate = true;
+    geometry.computeVertexNormals();
+  
+    // 기존에 blockoutMesh가 있다면 제거
+    if (blockoutMesh) {
+      scene.remove(blockoutMesh);
+      blockoutMesh.geometry.dispose();
+      blockoutMesh.material.dispose();
+      blockoutMesh = null;
+    }
+  
+    // blockout 시각화를 위한 Mesh 생성 (여기서는 초록색 반투명 재질 사용)
+    const blockoutMaterial = new THREE.MeshBasicMaterial({
+      color: 0x00ff00,
+      side: THREE.DoubleSide,
+      transparent: true,
+      opacity: 0.5,
+    });
+    blockoutMesh = new THREE.Mesh(geometry, blockoutMaterial);
+    scene.add(blockoutMesh);
+
+    mergeTargetAndBlockout();
+  }
 
 // 초기화 함수
 function init() {
