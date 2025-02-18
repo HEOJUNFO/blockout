@@ -5,7 +5,7 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import * as BufferGeometryUtils from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js';
 import { acceleratedRaycast, computeBoundsTree, disposeBoundsTree } from 'three-mesh-bvh';
-import { SUBTRACTION, Brush, Evaluator } from 'three-bvh-csg';
+import { CSG } from 'three-bvh-csg';
 
 THREE.Mesh.prototype.raycast = acceleratedRaycast;
 THREE.BufferGeometry.prototype.computeBoundsTree = computeBoundsTree;
@@ -131,8 +131,8 @@ function init() {
   stats = new Stats();
   document.body.appendChild(stats.dom);
   
-  gui.add(params, 'detectUndercuts').name('Detect Undercuts').onChange(detectUndercuts);
-  gui.add(params, 'blockout').name('Apply Blockout').onChange(applyBlockout);
+  gui.add(params, 'detectUndercuts').name('Detect Undercuts')
+  gui.add(params, 'blockout').name('Apply Blockout')
   
   window.addEventListener('resize', () => {
     camera.aspect = window.innerWidth / window.innerHeight;
