@@ -5,7 +5,6 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import * as BufferGeometryUtils from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js';
 import { acceleratedRaycast, computeBoundsTree, disposeBoundsTree } from 'three-mesh-bvh';
-import { CSG } from 'three-bvh-csg';
 
 THREE.Mesh.prototype.raycast = acceleratedRaycast;
 THREE.BufferGeometry.prototype.computeBoundsTree = computeBoundsTree;
@@ -14,7 +13,6 @@ THREE.BufferGeometry.prototype.disposeBoundsTree = disposeBoundsTree;
 let stats, scene, camera, renderer, controls;
 let targetMesh = null;
 let undercutMesh = null; 
-let blockoutMesh = null;
 let material;
 
 const params = {
@@ -127,22 +125,7 @@ function detectUndercuts() {
 
 // 블록아웃 기능 (언더컷 보강)
 function applyBlockout() {
-  if (!targetMesh) return;
-  
-  if (blockoutMesh) {
-    scene.remove(blockoutMesh);
-    blockoutMesh.geometry.dispose();
-  }
-  
-  const offset = new THREE.Vector3(0, 0, -0.02); 
-  const blockoutGeometry = targetMesh.geometry.clone();
-  blockoutGeometry.translate(offset.x, offset.y, offset.z);
-  
-  const blockoutMeshNew = new THREE.Mesh(blockoutGeometry, new THREE.MeshBasicMaterial({ color: 0x808080, transparent: true, opacity: 0.6 }));
-  
-  const csgResult = CSG.union(targetMesh, blockoutMeshNew);
-  blockoutMesh = new THREE.Mesh(csgResult.geometry, targetMesh.material);
-  scene.add(blockoutMesh);
+
 }
 
 // 초기화 함수
@@ -196,7 +179,6 @@ function init() {
   
       reader.addEventListener( 'load', event => {
   
-        // arrayBuffer 받아 STL 파싱
         const arrayBuffer = event.target.result;
         const geometry = stlLoader.parse( arrayBuffer );
               
@@ -204,38 +186,29 @@ function init() {
               if ( ! positionAttr ) {
                 throw new Error('BufferGeometry has no position attribute.');
               }
-              const positions = positionAttr.array; // Float32Array
+              const positions = positionAttr.array; 
       
       
               const indices = [];
-              // positions.length는 (정점 수 * 3) 이므로, 실제 정점 개수 = positions.length / 3
               for ( let i = 0; i < positions.length / 3; i += 3 ) {
                 indices.push( i, i + 1, i + 2 );
               }
       
-              // 4) 새로운 BufferGeometry 생성
               let newGeometry = new THREE.BufferGeometry();
       
-              // position 어트리뷰트 등록 (3개씩 -> x, y, z)
-              // 주의: 두 번째 인자로 3을 넣어야 x,y,z로 묶임
               newGeometry.setAttribute(
                 'position',
                 new THREE.Float32BufferAttribute( positions, 3 )
               );
       
-              // 인덱스 설정
-              // 만약 정점 수가 매우 많을 경우, Uint32BufferAttribute( indices, 1 )가 필요할 수도 있음
-              // (65,535개 초과인 경우)
               newGeometry.setIndex(
                 new THREE.Uint32BufferAttribute( indices, 1 )
               );
       
-            // STL 지오메트리 세팅 (정규화 + scene에 추가 + 카메라조정)
             setTargetMeshGeometry( newGeometry );
   
       }, false );
   
-      // 바이너리 STL 읽기
       reader.readAsArrayBuffer( file );
   
     }
