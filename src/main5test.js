@@ -106,6 +106,7 @@ function detectUndercuts() {
   
     const dot = normal.dot(viewVec);
     if (dot < 0.1) {
+      console.log('Undercut detected:', dot);
       // undercut인 경우 표시 및 시각화용 데이터 추가
       undercutTriangles[triIndex] = true;
       undercutPositions.push(a.x, a.y, a.z);
