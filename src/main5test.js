@@ -55,7 +55,8 @@ function setTargetMeshGeometry(geometry) {
   scene.add(targetMesh);
 }
 
-// undercut 감지 (현재 카메라 상태 기반) – 결과를 캐시하여 저장하고, 카메라 상태를 저장
+// undercut 감지 (현재 카메라 상태 기반)
+// 각 삼각형별로 (0.1 - dot) 값을 undercutOffsets 배열에 저장
 function detectUndercuts() {
   if (!targetMesh) return;
   
@@ -67,7 +68,6 @@ function detectUndercuts() {
     undercutMesh = null;
   }
   
-  // 메시 월드행렬 업데이트
   targetMesh.updateMatrixWorld(true);
   const geometry = targetMesh.geometry;
   const posAttr = geometry.attributes.position;
@@ -81,9 +81,10 @@ function detectUndercuts() {
   
   const triangleCount = indexAttr.count / 3;
   const undercutTriangles = new Array(triangleCount);
+  // undercut 오프셋 값을 저장할 배열
+  const undercutOffsets = [];
   let triIndex = 0;
   
-  // 각 삼각형마다 undercut 여부 판단
   for (let i = 0; i < indexAttr.count; i += 3) {
     const aIndex = indexAttr.getX(i);
     const bIndex = indexAttr.getX(i + 1);
@@ -107,8 +108,9 @@ function detectUndercuts() {
     const dot = normal.dot(viewVec);
     if (dot < 0.1) {
       console.log('Undercut detected:', dot);
-      // undercut인 경우 표시 및 시각화용 데이터 추가
       undercutTriangles[triIndex] = true;
+      undercutOffsets.push(0.1 - dot);
+      
       undercutPositions.push(a.x, a.y, a.z);
       undercutPositions.push(b.x, b.y, b.z);
       undercutPositions.push(c.x, c.y, c.z);
@@ -118,6 +120,8 @@ function detectUndercuts() {
       undercutNormals.push(normal.x, normal.y, normal.z);
     } else {
       undercutTriangles[triIndex] = false;
+      // undercut이 아니면 0 값을 저장
+      undercutOffsets.push(0);
     }
   
     triIndex++;
@@ -138,9 +142,10 @@ function detectUndercuts() {
   undercutMesh = new THREE.Mesh(undercutGeometry, redMaterial);
   scene.add(undercutMesh);
   
-  // 감지 당시 undercut 삼각형 정보와 카메라 방향을 캐시
+  // 캐시: undercut 삼각형 정보, 각 삼각형별 offset 값, 그리고 카메라 방향 저장
   cachedUndercutData = {
     undercutTriangles: undercutTriangles,
+    undercutOffsets: undercutOffsets,
     cameraDir: camera.getWorldDirection(new THREE.Vector3()).clone()
   };
 
@@ -232,7 +237,6 @@ function applyBlockoutExtrude() {
   // 각 undercut 정점에 대해 오프셋 벡터(누적 후 평균) 계산
   const vertexOffsets = {};
   const vertexCounts = {};
-  const offsetDistance = 0.00001;
   for (let t = 0; t < triangleCount; t++) {
     if (undercutTriangles[t]) {
       const i0 = indices[t * 3], i1 = indices[t * 3 + 1], i2 = indices[t * 3 + 2];
@@ -243,7 +247,7 @@ function applyBlockoutExtrude() {
       const ab = new THREE.Vector3().subVectors(v1, v0);
       const ac = new THREE.Vector3().subVectors(v2, v0);
       const normal = new THREE.Vector3().crossVectors(ab, ac).normalize();
-      // 카메라 방향 성분 제거 (캐시된 감지 시의 카메라 방향 사용)
+      // 카메라 방향 성분 제거: 캐시된 카메라 방향 사용
       const dot = normal.dot(usedCameraDir);
       let projected = normal.clone().sub(usedCameraDir.clone().multiplyScalar(dot));
       if (projected.lengthSq() > 0.0001) {
@@ -251,7 +255,16 @@ function applyBlockoutExtrude() {
       } else {
         projected.copy(normal).normalize();
       }
-      projected.multiplyScalar(offsetDistance);
+      // 기존 상수 offsetDistance 대신 캐시된 offset 값을 사용 (없으면 (0.1 - dot)로 계산)
+      const currentOffset = (cachedUndercutData &&
+                              cachedUndercutData.undercutOffsets &&
+                              typeof cachedUndercutData.undercutOffsets[t] === 'number')
+                              ? cachedUndercutData.undercutOffsets[t]
+                              : (0.1 - dot);
+
+      console.log('currentOffset:', currentOffset*0.001);
+      projected.multiplyScalar(currentOffset*0.001);
+      
       [i0, i1, i2].forEach(i => {
         if (!vertexOffsets[i]) {
           vertexOffsets[i] = new THREE.Vector3();
@@ -280,8 +293,6 @@ function applyBlockoutExtrude() {
   });
   
   // 새 기하를 위한 정점 배열 구성  
-  // – bottom: 기존 정점 그대로  
-  // – top: undercut 정점 복제 후 오프셋 적용
   const newVertices = [];
   for (let i = 0; i < vertexCount; i++) {
     newVertices.push(posAttr.getX(i), posAttr.getY(i), posAttr.getZ(i));
@@ -294,9 +305,6 @@ function applyBlockoutExtrude() {
   });
   
   // 새 인덱스 배열 생성  
-  // – non-undercut 삼각형: bottom 면 그대로  
-  // – undercut 삼각형: bottom 면과 윗면 생성  
-  // – 경계 엣지: side face 생성
   const newIndices = [];
   
   // non-undercut 삼각형 (원본 그대로)
@@ -318,17 +326,8 @@ function applyBlockoutExtrude() {
     }
   }
   
-  // 경계 엣지를 따라 side face 생성 (quad를 두 삼각형으로 분할)
-  // boundaryEdges.forEach(edge => {
-  //   const a = edge.a, b = edge.b;
-  //   if (extrudedIndexMap[a] === undefined || extrudedIndexMap[b] === undefined) return;
-  //   const aTop = extrudedIndexMap[a];
-  //   const bTop = extrudedIndexMap[b];
-  //   newIndices.push(a, b, bTop);
-  //   newIndices.push(a, bTop, aTop);
-  // });
+  // (필요 시 경계 엣지를 따라 side face 생성 코드 추가 가능)
   
-  // 새 BufferGeometry 생성 후 targetMesh 업데이트
   const newGeometry = new THREE.BufferGeometry();
   newGeometry.setAttribute('position', new THREE.Float32BufferAttribute(newVertices, 3));
   newGeometry.setIndex(newIndices);
@@ -339,8 +338,7 @@ function applyBlockoutExtrude() {
   targetMesh = new THREE.Mesh(newGeometry, material);
   scene.add(targetMesh);
 
-  // **** 수정된 부분 ****
-  // blockout extrude 후, 캐시된 undercut 데이터는 더 이상 유효하지 않으므로 초기화하여 다음 감지 시 재계산하도록 합니다.
+  // blockout extrude 후 캐시 초기화
   cachedUndercutData = null;
 }
 
@@ -352,9 +350,8 @@ function restoreCamera() {
     controls.update();
   }
 }
-
   
-// 초기화 함수
+// 초기화 및 렌더링 관련 코드
 function init() {
   renderer = new THREE.WebGLRenderer({ antialias: true });
   renderer.setSize(window.innerWidth, window.innerHeight);
