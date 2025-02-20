@@ -105,7 +105,7 @@ function detectUndercuts() {
     const viewVec = new THREE.Vector3().subVectors(cameraPos, center).normalize();
   
     const dot = normal.dot(viewVec);
-    if (dot <= 0) {
+    if (dot < 0.1) {
       // undercut인 경우 표시 및 시각화용 데이터 추가
       undercutTriangles[triIndex] = true;
       undercutPositions.push(a.x, a.y, a.z);
@@ -306,14 +306,6 @@ function applyBlockoutExtrude() {
     }
   }
   
-  // undercut 삼각형의 바닥면 (bottom face)
-  for (let t = 0; t < triangleCount; t++) {
-    if (undercutTriangles[t]) {
-      const i0 = indices[t * 3], i1 = indices[t * 3 + 1], i2 = indices[t * 3 + 2];
-      newIndices.push(i0, i1, i2);
-    }
-  }
-  
   // undercut 삼각형의 윗면 (top face – 반대 방향으로)
   for (let t = 0; t < triangleCount; t++) {
     if (undercutTriangles[t]) {
@@ -326,14 +318,14 @@ function applyBlockoutExtrude() {
   }
   
   // 경계 엣지를 따라 side face 생성 (quad를 두 삼각형으로 분할)
-  boundaryEdges.forEach(edge => {
-    const a = edge.a, b = edge.b;
-    if (extrudedIndexMap[a] === undefined || extrudedIndexMap[b] === undefined) return;
-    const aTop = extrudedIndexMap[a];
-    const bTop = extrudedIndexMap[b];
-    newIndices.push(a, b, bTop);
-    newIndices.push(a, bTop, aTop);
-  });
+  // boundaryEdges.forEach(edge => {
+  //   const a = edge.a, b = edge.b;
+  //   if (extrudedIndexMap[a] === undefined || extrudedIndexMap[b] === undefined) return;
+  //   const aTop = extrudedIndexMap[a];
+  //   const bTop = extrudedIndexMap[b];
+  //   newIndices.push(a, b, bTop);
+  //   newIndices.push(a, bTop, aTop);
+  // });
   
   // 새 BufferGeometry 생성 후 targetMesh 업데이트
   const newGeometry = new THREE.BufferGeometry();
