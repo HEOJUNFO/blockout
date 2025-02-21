@@ -15,6 +15,7 @@ let targetMesh = null;
 let undercutMesh = null; 
 let material;
 let savedCameraState = null;  // 카메라 상태 저장 변수
+let detectCount = 0;          // 언더컷 감지 호출 횟수를 추적
 
 const params = {
   matcap: 'Clay',
@@ -46,10 +47,10 @@ function setTargetMeshGeometry(geometry) {
 }
 
 // 언더컷 감지 기능
-// detectUndercuts()가 처음 호출될 때 카메라 상태(위치, 컨트롤 타겟, 쿼터니언, 시선 방향)를 저장합니다.
 function detectUndercuts() {
   if (!targetMesh) return;
   
+  // 처음 호출 시 카메라 상태 저장
   if (!savedCameraState) {
     const direction = new THREE.Vector3();
     camera.getWorldDirection(direction);
@@ -62,6 +63,7 @@ function detectUndercuts() {
     console.log('Camera state saved:', savedCameraState);
   }
   
+  // 기존 언더컷 메쉬 제거
   if (undercutMesh) {
     scene.remove(undercutMesh);
     undercutMesh.geometry.dispose();
@@ -86,6 +88,10 @@ function detectUndercuts() {
     triangleCount = posAttr.count / 3;
   }
   
+  // 첫 호출은 dot <= 0.01, 두번째부터는 dot <= 0.0 조건 사용
+  const threshold = (detectCount === 0) ? 0.01 : 0.0;
+  
+  // 각 삼각형의 법선과 카메라 시선 방향을 비교하여 언더컷 면을 검출합니다.
   for (let i = 0; i < triangleCount; i++) {
     let a, b, c;
     if (indexAttr) {
@@ -108,7 +114,7 @@ function detectUndercuts() {
     const viewVec = new THREE.Vector3().subVectors(cameraPos, center).normalize();
   
     const dot = normal.dot(viewVec);
-    if (dot <= 0.01) {
+    if (dot <= threshold) {
       undercutPositions.push(a.x, a.y, a.z);
       undercutPositions.push(b.x, b.y, b.z);
       undercutPositions.push(c.x, c.y, c.z);
@@ -132,20 +138,25 @@ function detectUndercuts() {
   
   undercutMesh = new THREE.Mesh(undercutGeometry, redMaterial);
   scene.add(undercutMesh);
+
+  // 호출 횟수 증가: 두번째부터는 dot <= 0.0 조건이 적용됩니다.
+  detectCount++;
 }
 
+// 블록아웃 및 내부 면 제거 (중복 정점 병합 활용)
 function Blockout() {
   if (!targetMesh || !undercutMesh) return;
   
-  const blockoutDistance = 0.1; // blockout 이동 거리
+  const blockoutDistance = 0.1; // 블록아웃 이동 거리
   const insertionDir = new THREE.Vector3();
-  // 현재 카메라 상태가 아니라, 언더컷 감지 시 저장된 카메라 방향을 사용
+  // 저장된 카메라 방향 사용
   if (savedCameraState && savedCameraState.direction) {
     insertionDir.copy(savedCameraState.direction);
   } else {
     camera.getWorldDirection(insertionDir);
   }
   
+  // 타겟 메쉬를 비인덱스 형태로 변환
   if (targetMesh.geometry.index !== null) {
     targetMesh.geometry = targetMesh.geometry.toNonIndexed();
   }
@@ -154,6 +165,7 @@ function Blockout() {
   const triangleCount = undercutPositions.length / 9;
   const blockoutGeometries = [];
   
+  // 각 언더컷 삼각형에 대해 블록아웃 프리즘 생성
   for (let i = 0; i < triangleCount; i++) {
     const a = new THREE.Vector3(
       undercutPositions[i * 9],
@@ -176,12 +188,17 @@ function Blockout() {
     const c2 = c.clone().addScaledVector(insertionDir, blockoutDistance);
   
     const vertices = [];
+    // 상단 면
     vertices.push(a2.x, a2.y, a2.z, b2.x, b2.y, b2.z, c2.x, c2.y, c2.z);
+    // 하단 면
     vertices.push(a.x, a.y, a.z, c.x, c.y, c.z, b.x, b.y, b.z);
+    // 측면 1
     vertices.push(a.x, a.y, a.z, b.x, b.y, b.z, b2.x, b2.y, b2.z);
     vertices.push(a.x, a.y, a.z, b2.x, b2.y, b2.z, a2.x, a2.y, a2.z);
+    // 측면 2
     vertices.push(b.x, b.y, b.z, c.x, c.y, c.z, c2.x, c2.y, c2.z);
     vertices.push(b.x, b.y, b.z, c2.x, c2.y, c2.z, b2.x, b2.y, b2.z);
+    // 측면 3
     vertices.push(c.x, c.y, c.z, a.x, a.y, a.z, a2.x, a2.y, a2.z);
     vertices.push(c.x, c.y, c.z, a2.x, a2.y, a2.z, c2.x, c2.y, c2.z);
   
@@ -193,24 +210,29 @@ function Blockout() {
     blockoutGeometries.push(nonIndexedPrismGeometry);
   }
   
+  // 블록아웃 기하체들을 병합
   const mergedBlockoutGeometry = BufferGeometryUtils.mergeGeometries(blockoutGeometries, false);
-  const mergedGeometry = BufferGeometryUtils.mergeGeometries(
+  let mergedGeometry = BufferGeometryUtils.mergeGeometries(
     [targetMesh.geometry, mergedBlockoutGeometry],
     false
   );
+  
+  // 중복 정점을 병합하여 불필요한 면 제거 (1e-5는 tolerance 값으로 모델 스케일에 맞게 조정)
+  mergedGeometry = BufferGeometryUtils.mergeVertices(mergedGeometry, 1e-5);
+  mergedGeometry.computeVertexNormals();
   mergedGeometry.computeBoundingSphere();
   
   targetMesh.geometry.dispose();
   targetMesh.geometry = mergedGeometry;
   
-  // undercut Mesh는 유지할 수도 있고, 제거할 수도 있습니다.
+  // 언더컷 메쉬 제거
   scene.remove(undercutMesh);
   undercutMesh.geometry.dispose();
   undercutMesh.material.dispose();
   undercutMesh = null;
 }
 
-// 저장된 카메라 상태로 복귀시키는 함수
+// 저장된 카메라 상태 복원 함수
 function restoreCamera() {
   if (savedCameraState) {
     camera.position.copy(savedCameraState.position);
@@ -235,6 +257,7 @@ function init() {
   
   controls = new OrbitControls(camera, renderer.domElement);
   
+  // Matcap 텍스처 로드
   matcaps['Clay'] = new THREE.TextureLoader().load('textures/B67F6B_4B2E2A_6C3A34_F3DBC6-256px.png');
   matcaps['Red Wax'] = new THREE.TextureLoader().load('textures/763C39_431510_210504_55241C-256px.png');
   matcaps['Shiny Green'] = new THREE.TextureLoader().load('textures/3B6E10_E3F2C3_88AC2E_99CE51-256px.png');
