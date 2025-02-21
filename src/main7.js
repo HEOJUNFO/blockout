@@ -134,17 +134,6 @@ function detectUndercuts() {
   scene.add(undercutMesh);
 }
 
-// 저장된 카메라 상태로 복귀시키는 함수
-function restoreCamera() {
-  if (savedCameraState) {
-    camera.position.copy(savedCameraState.position);
-    controls.target.copy(savedCameraState.target);
-    camera.quaternion.copy(savedCameraState.quaternion);
-    controls.update();
-    console.log('Camera restored to saved state.');
-  }
-}
-
 function Blockout() {
   if (!targetMesh || !undercutMesh) return;
   
@@ -219,6 +208,17 @@ function Blockout() {
   undercutMesh.geometry.dispose();
   undercutMesh.material.dispose();
   undercutMesh = null;
+}
+
+// 저장된 카메라 상태로 복귀시키는 함수
+function restoreCamera() {
+  if (savedCameraState) {
+    camera.position.copy(savedCameraState.position);
+    controls.target.copy(savedCameraState.target);
+    camera.quaternion.copy(savedCameraState.quaternion);
+    controls.update();
+    console.log('Camera restored to saved state.');
+  }
 }
 
 // 초기화 함수
