@@ -12,16 +12,17 @@ THREE.BufferGeometry.prototype.disposeBoundsTree = disposeBoundsTree;
 
 let stats, scene, camera, renderer, controls;
 let targetMesh = null;
+let originalMesh = null;   // 원본 메시 저장
 let undercutMesh = null; 
 let material;
-let savedCameraState = null;  // 카메라 상태 저장 변수
-let detectCount = 0;          // 언더컷 감지 호출 횟수를 추적
+let savedCameraState = null;  // 카메라 상태 저장
+let detectCount = 0;          // 언더컷 감지 호출 횟수 추적
 
 const params = {
   matcap: 'Clay',
-  displayHelper: false,
   detectUndercuts: false,
   blockout: false,
+  showOriginal: false,  // true이면 원본 모델만, false이면 블록아웃 후 모델만 표시
 };
 
 const matcaps = {};
@@ -31,10 +32,16 @@ const gui = new dat.GUI();
 
 // STL 파일 로드 및 처리
 function setTargetMeshGeometry(geometry) {
+  // 기존 메시들 제거
   if (targetMesh) {
     scene.remove(targetMesh);
     targetMesh.geometry.dispose();
   }
+  if (originalMesh) {
+    scene.remove(originalMesh);
+    originalMesh.geometry.dispose();
+  }
+  
   geometry.center();
   geometry.computeBoundingSphere();
   if (geometry.boundingSphere) {
@@ -42,15 +49,28 @@ function setTargetMeshGeometry(geometry) {
     geometry.scale(1 / radius, 1 / radius, 1 / radius);
   }
   geometry.computeVertexNormals();
+  
+  // 블록아웃 후 모델로 사용될 메시
   targetMesh = new THREE.Mesh(geometry, material);
   scene.add(targetMesh);
+  
+  // 원본 메시 deep clone
+  const originalGeometry = geometry.clone();
+  originalMesh = new THREE.Mesh(originalGeometry, material);
+  scene.add(originalMesh);
+  
+  // 둘 다 동일한 위치에 배치
+  originalMesh.position.set(0, 0, 0);
+  targetMesh.position.set(0, 0, 0);
+  
+  // 토글 상태 업데이트
+  updateComparison();
 }
 
-// 언더컷 감지 기능
+// 언더컷 감지 기능 (기존과 동일)
 function detectUndercuts() {
   if (!targetMesh) return;
   
-  // 처음 호출 시 카메라 상태 저장
   if (!savedCameraState) {
     const direction = new THREE.Vector3();
     camera.getWorldDirection(direction);
@@ -58,12 +78,11 @@ function detectUndercuts() {
       position: camera.position.clone(),
       target: controls.target.clone(),
       quaternion: camera.quaternion.clone(),
-      direction: direction.clone()  // 감지 당시의 카메라 시선 저장
+      direction: direction.clone()
     };
     console.log('Camera state saved:', savedCameraState);
   }
   
-  // 기존 언더컷 메쉬 제거
   if (undercutMesh) {
     scene.remove(undercutMesh);
     undercutMesh.geometry.dispose();
@@ -81,17 +100,9 @@ function detectUndercuts() {
   const undercutPositions = [];
   const undercutNormals = [];
   
-  let triangleCount;
-  if (indexAttr) {
-    triangleCount = indexAttr.count / 3;
-  } else {
-    triangleCount = posAttr.count / 3;
-  }
+  let triangleCount = indexAttr ? indexAttr.count / 3 : posAttr.count / 3;
+  const threshold = (detectCount === 0) ? 0.1 : 0.0;
   
-  // 첫 호출은 dot <= 0.01, 두번째부터는 dot <= 0.0 조건 사용
-  const threshold = (detectCount === 0) ? 0.01 : 0.0;
-  
-  // 각 삼각형의 법선과 카메라 시선 방향을 비교하여 언더컷 면을 검출합니다.
   for (let i = 0; i < triangleCount; i++) {
     let a, b, c;
     if (indexAttr) {
@@ -139,24 +150,21 @@ function detectUndercuts() {
   undercutMesh = new THREE.Mesh(undercutGeometry, redMaterial);
   scene.add(undercutMesh);
 
-  // 호출 횟수 증가: 두번째부터는 dot <= 0.0 조건이 적용됩니다.
   detectCount++;
 }
 
-// 블록아웃 및 내부 면 제거 (중복 정점 병합 활용)
+// 블록아웃 및 내부 면 제거 (기존과 동일)
 function Blockout() {
   if (!targetMesh || !undercutMesh) return;
   
-  const blockoutDistance = 0.1; // 블록아웃 이동 거리
+  const blockoutDistance = 0.5;
   const insertionDir = new THREE.Vector3();
-  // 저장된 카메라 방향 사용
   if (savedCameraState && savedCameraState.direction) {
     insertionDir.copy(savedCameraState.direction);
   } else {
     camera.getWorldDirection(insertionDir);
   }
   
-  // 타겟 메쉬를 비인덱스 형태로 변환
   if (targetMesh.geometry.index !== null) {
     targetMesh.geometry = targetMesh.geometry.toNonIndexed();
   }
@@ -165,7 +173,6 @@ function Blockout() {
   const triangleCount = undercutPositions.length / 9;
   const blockoutGeometries = [];
   
-  // 각 언더컷 삼각형에 대해 블록아웃 프리즘 생성
   for (let i = 0; i < triangleCount; i++) {
     const a = new THREE.Vector3(
       undercutPositions[i * 9],
@@ -210,14 +217,12 @@ function Blockout() {
     blockoutGeometries.push(nonIndexedPrismGeometry);
   }
 
-  // 블록아웃 기하체들을 병합
   const mergedBlockoutGeometry = BufferGeometryUtils.mergeGeometries(blockoutGeometries, false);
   let mergedGeometry = BufferGeometryUtils.mergeGeometries(
     [targetMesh.geometry, mergedBlockoutGeometry],
     false
   );
   
-  // 중복 정점을 병합하여 불필요한 면 제거 (1e-5는 tolerance 값으로 모델 스케일에 맞게 조정)
   mergedGeometry = BufferGeometryUtils.mergeVertices(mergedGeometry, 1e-5);
   mergedGeometry.computeVertexNormals();
   mergedGeometry.computeBoundingSphere();
@@ -225,14 +230,16 @@ function Blockout() {
   targetMesh.geometry.dispose();
   targetMesh.geometry = mergedGeometry;
   
-  // 언더컷 메쉬 제거
   scene.remove(undercutMesh);
   undercutMesh.geometry.dispose();
   undercutMesh.material.dispose();
   undercutMesh = null;
+  
+  // 블록아웃 후 모델이 업데이트 되었으므로 토글 상태 재적용
+  updateComparison();
 }
 
-// 저장된 카메라 상태 복원 함수
+// 저장된 카메라 상태 복원 (기존과 동일)
 function restoreCamera() {
   if (savedCameraState) {
     camera.position.copy(savedCameraState.position);
@@ -240,6 +247,20 @@ function restoreCamera() {
     camera.quaternion.copy(savedCameraState.quaternion);
     controls.update();
     console.log('Camera restored to saved state.');
+  }
+}
+
+// 토글 상태에 따라 두 모델의 visibility를 업데이트하는 함수
+function updateComparison() {
+  // 두 메시 모두 동일한 위치에 겹쳐 있습니다.
+  originalMesh.position.set(0, 0, 0);
+  targetMesh.position.set(0, 0, 0);
+  if (params.showOriginal) {
+    originalMesh.visible = true;
+    targetMesh.visible = false;
+  } else {
+    originalMesh.visible = false;
+    targetMesh.visible = true;
   }
 }
 
@@ -255,7 +276,6 @@ function init() {
   camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 50);
   camera.position.set(0, 0, 3);
   
-  // TrackballControls 사용
   controls = new TrackballControls(camera, renderer.domElement);
   controls.rotateSpeed = 5.0;
   controls.zoomSpeed = 1.2;
@@ -277,9 +297,12 @@ function init() {
   stats = new Stats();
   document.body.appendChild(stats.dom);
   
+  // GUI 버튼들
   gui.add({ detectUndercuts }, 'detectUndercuts').name("Detect Undercuts");
   gui.add({ applyBlockout: Blockout }, 'applyBlockout').name("Apply Blockout");
   gui.add({ restoreCamera }, 'restoreCamera').name("Restore Camera");
+  // showOriginal 토글: true이면 원본, false이면 블록아웃 후 모델만 보임
+  gui.add(params, 'showOriginal').name("Show Original").onChange(updateComparison);
   
   window.addEventListener('resize', () => {
     camera.aspect = window.innerWidth / window.innerHeight;
@@ -325,8 +348,9 @@ function render() {
   material.matcap = matcaps[params.matcap];
   requestAnimationFrame(render);
   stats.update();
-  controls.update(); // TrackballControls 업데이트
+  controls.update();
   renderer.render(scene, camera);
 }
 
 init();
+
