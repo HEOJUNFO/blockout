@@ -157,7 +157,7 @@ function detectUndercuts() {
 function Blockout() {
   if (!targetMesh || !undercutMesh) return;
   
-  const blockoutDistance = 0.5;
+  const blockoutDistance = 0.1;
   const insertionDir = new THREE.Vector3();
   if (savedCameraState && savedCameraState.direction) {
     insertionDir.copy(savedCameraState.direction);
