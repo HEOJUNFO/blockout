@@ -41,7 +41,12 @@ function setTargetMeshGeometry(geometry) {
     const radius = geometry.boundingSphere.radius;
     geometry.scale(1 / radius, 1 / radius, 1 / radius);
   }
+  geometry.deleteAttribute( 'uv' );
+  geometry = BufferGeometryUtils.mergeVertices( geometry );
   geometry.computeVertexNormals();
+  geometry.attributes.position.setUsage( THREE.DynamicDrawUsage );
+  geometry.attributes.normal.setUsage( THREE.DynamicDrawUsage );
+  geometry.computeBoundsTree( { setBoundingBox: false } );
   
   // 블록아웃 후 모델로 사용될 메시
   targetMesh = new THREE.Mesh(geometry, material);
@@ -79,7 +84,7 @@ function init() {
   matcaps['Normal'] = new THREE.TextureLoader().load('textures/7877EE_D87FC5_75D9C7_1C78C0-256px.png');
   
   material = new THREE.MeshMatcapMaterial({
-    flatShading: true,
+    flatShading: false,
     side: THREE.DoubleSide,
   });
   
