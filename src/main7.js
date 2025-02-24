@@ -1,7 +1,7 @@
 import Stats from 'three/examples/jsm/libs/stats.module.js';
 import * as dat from 'three/examples/jsm/libs/lil-gui.module.min.js';
 import * as THREE from 'three';
-import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+import { TrackballControls } from 'three/examples/jsm/controls/TrackballControls.js';
 import * as BufferGeometryUtils from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js';
 import { acceleratedRaycast, computeBoundsTree, disposeBoundsTree } from 'three-mesh-bvh';
@@ -209,7 +209,7 @@ function Blockout() {
     const nonIndexedPrismGeometry = prismGeometry.index ? prismGeometry.toNonIndexed() : prismGeometry;
     blockoutGeometries.push(nonIndexedPrismGeometry);
   }
-  
+
   // 블록아웃 기하체들을 병합
   const mergedBlockoutGeometry = BufferGeometryUtils.mergeGeometries(blockoutGeometries, false);
   let mergedGeometry = BufferGeometryUtils.mergeGeometries(
@@ -255,7 +255,13 @@ function init() {
   camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 50);
   camera.position.set(0, 0, 3);
   
-  controls = new OrbitControls(camera, renderer.domElement);
+  // TrackballControls 사용
+  controls = new TrackballControls(camera, renderer.domElement);
+  controls.rotateSpeed = 5.0;
+  controls.zoomSpeed = 1.2;
+  controls.panSpeed = 0.8;
+  controls.staticMoving = true;
+  controls.dynamicDampingFactor = 0.3;
   
   // Matcap 텍스처 로드
   matcaps['Clay'] = new THREE.TextureLoader().load('textures/B67F6B_4B2E2A_6C3A34_F3DBC6-256px.png');
@@ -319,6 +325,7 @@ function render() {
   material.matcap = matcaps[params.matcap];
   requestAnimationFrame(render);
   stats.update();
+  controls.update(); // TrackballControls 업데이트
   renderer.render(scene, camera);
 }
 
