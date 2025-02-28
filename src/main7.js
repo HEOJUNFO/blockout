@@ -4,6 +4,7 @@ import * as THREE from 'three';
 import { TrackballControls } from 'three/examples/jsm/controls/TrackballControls.js';
 import * as BufferGeometryUtils from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js';
+import { STLExporter } from 'three/examples/jsm/exporters/STLExporter.js';
 import { acceleratedRaycast, computeBoundsTree, disposeBoundsTree } from 'three-mesh-bvh';
 
 THREE.Mesh.prototype.raycast = acceleratedRaycast;
@@ -246,6 +247,43 @@ function Blockout() {
   updateComparison();
 }
 
+// targetMesh 내보내기 함수
+function exportMesh() {
+  if (!targetMesh) {
+    console.warn('내보낼 메시가 없습니다');
+    return;
+  }
+  
+  // 현재 보이는 메시 선택 (원본 또는 수정된 메시)
+  const meshToExport = params.showOriginal ? originalMesh : targetMesh;
+  
+  // STL 내보내기 인스턴스 생성
+  const exporter = new STLExporter();
+  
+  // 메시를 STL 형식으로 변환 (바이너리)
+  const result = exporter.parse(meshToExport, { binary: true });
+  
+  // STL 데이터로 Blob 생성
+  const blob = new Blob([result], { type: 'application/octet-stream' });
+  
+  // Blob에 대한 URL 생성
+  const url = URL.createObjectURL(blob);
+  
+  // 다운로드 링크 생성 및 트리거
+  const link = document.createElement('a');
+  link.href = url;
+  const fileName = params.showOriginal ? 'original_mesh.stl' : 'modified_mesh.stl';
+  link.download = fileName;
+  document.body.appendChild(link);
+  link.click();
+  
+  // 정리
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
+  
+  console.log(`${fileName} 파일이 내보내기 되었습니다.`);
+}
+
 // 저장된 카메라 상태 복원 (기존과 동일)
 function restoreCamera() {
   if (savedCameraState) {
@@ -310,6 +348,8 @@ function init() {
   gui.add({ restoreCamera }, 'restoreCamera').name("Restore Camera");
   // showOriginal 토글: true이면 원본, false이면 블록아웃 후 모델만 보임
   gui.add(params, 'showOriginal').name("Show Original").onChange(updateComparison);
+  // 내보내기 버튼 추가
+  gui.add({ exportMesh }, 'exportMesh').name("Export Mesh");
   
   window.addEventListener('resize', () => {
     camera.aspect = window.innerWidth / window.innerHeight;
@@ -360,4 +400,3 @@ function render() {
 }
 
 init();
-
