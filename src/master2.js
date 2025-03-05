@@ -19,6 +19,10 @@ const params = {
   detectUndercuts: false,
   blockout: false,
   showOriginal: false,  // true이면 원본 모델만, false이면 블록아웃 후 모델만 표시
+  clearPoints: function() {
+    // 모든 점과 곡선 초기화
+    clearAllPointsAndCurves();
+  }
 };
 
 const matcaps = {};
@@ -26,8 +30,44 @@ const stlLoader = new STLLoader();
 const gui = new dat.GUI();
 
 // 배열 선언: 클릭한 점과 생성된 선(Line)을 저장
-let clickPoints = []; // { point, normal } 형태
-let curveLine = null; // 생성된 선(Line) 객체
+let clickPoints = []; // { point, normal, marker } 형태
+let curveLines = []; // 생성된 선(Line) 객체들의 배열
+let closedArea = null; // 닫힌 영역을 저장할 변수
+let isDrawingClosed = false; // 닫힌 영역인지 여부
+
+// 점 영역 감지 관련 상수
+const POINT_DETECTION_RADIUS = 0.02; // 점 감지 반경
+let hoveredPointIndex = -1; // 현재 마우스가 위치한 점의 인덱스 (없으면 -1)
+
+// 모든 점과 곡선 초기화 함수
+function clearAllPointsAndCurves() {
+  // 모든 마커 제거
+  clickPoints.forEach(pointData => {
+    if (pointData.marker) {
+      scene.remove(pointData.marker);
+    }
+  });
+
+  // 모든 곡선 제거
+  curveLines.forEach(line => {
+    scene.remove(line);
+  });
+
+  // 닫힌 영역 제거
+  if (closedArea) {
+    scene.remove(closedArea);
+    closedArea = null;
+  }
+
+  // 배열 초기화
+  clickPoints = [];
+  curveLines = [];
+  isDrawingClosed = false;
+  hoveredPointIndex = -1;
+  
+  // 커서 스타일 초기화
+  renderer.domElement.style.cursor = 'auto';
+}
 
 // STL 파일 로드 및 처리 함수
 function setTargetMeshGeometry(geometry) {
@@ -89,6 +129,10 @@ function init() {
   stats = new Stats();
   document.body.appendChild(stats.dom);
 
+  // GUI 설정
+  gui.add(params, 'matcap', Object.keys(matcaps)).name('Material');
+  gui.add(params, 'clearPoints').name('Clear All Points');
+
   window.addEventListener('resize', () => {
     camera.aspect = window.innerWidth / window.innerHeight;
     camera.updateProjectionMatrix();
@@ -128,8 +172,121 @@ function init() {
 
   // 클릭 이벤트 추가: 모델 클릭 시 점 생성 및 선 그리기
   renderer.domElement.addEventListener('click', onClick, false);
+  
+  // 마우스 이동 이벤트 추가: 기존 점 위에서 커서 변경
+  renderer.domElement.addEventListener('mousemove', onMouseMove, false);
 
   render();
+}
+
+// 두 점 사이에 곡선 생성 함수
+function createCurveBetweenPoints(pointA, pointB) {
+  const { point: pointAPos, normal: normA } = pointA;
+  const { point: pointBPos, normal: normB } = pointB;
+  
+  // 두 점 사이를 N등분하여 표면상의 점들을 샘플링
+  const sampleCount = 20000;
+  const pointsOnSurface = [];
+
+  for (let i = 0; i <= sampleCount; i++) {
+    const t = i / sampleCount;
+    // 두 점 사이 선형 보간
+    let pos = new THREE.Vector3().lerpVectors(pointAPos, pointBPos, t);
+    // 두 점의 법선을 보간하여 방향 결정
+    let norm = new THREE.Vector3().lerpVectors(normA, normB, t).normalize();
+    // 보간점에서 약간 위쪽(법선 방향)에서부터 반대 방향으로 레이캐스트
+    const rayOrigin = pos.clone().addScaledVector(norm, 0.1);
+    const sampleRaycaster = new THREE.Raycaster(rayOrigin, norm.clone().negate());
+    const sampleIntersects = sampleRaycaster.intersectObject(targetMesh, true);
+    // 원하는 오프셋 값
+    const offset = 0.001;
+    
+    if (sampleIntersects.length > 0) {
+      pos = sampleIntersects[0].point.clone().addScaledVector(sampleIntersects[0].face.normal, offset);
+    } else {
+      pos.addScaledVector(norm, offset);
+    }
+    pointsOnSurface.push(pos);
+  }
+
+  // Catmull-Rom 커브를 이용해 부드러운 곡선 생성
+  const curve = new THREE.CatmullRomCurve3(pointsOnSurface);
+  const curvePoints = curve.getPoints(100);
+  const curveGeometry = new THREE.BufferGeometry().setFromPoints(curvePoints);
+  const curveLine = new THREE.Line(curveGeometry, new THREE.LineBasicMaterial({ color: 0xff0000 }));
+  scene.add(curveLine);
+  
+  // 생성된 곡선 반환
+  return curveLine;
+}
+
+// 닫힌 영역 생성 함수 
+function createClosedArea() {
+  // 이미 닫힌 영역이 있다면 제거
+  if (closedArea) {
+    scene.remove(closedArea);
+  }
+  
+  // 마지막 점과 첫 번째 점 사이에 곡선 생성
+  const firstPoint = clickPoints[0];
+  const lastPoint = clickPoints[clickPoints.length - 1];
+  const closingLine = createCurveBetweenPoints(lastPoint, firstPoint);
+  curveLines.push(closingLine);
+  
+  // 닫힌 영역임을 표시
+  isDrawingClosed = true;
+  
+  // 첫 번째 점의 색상을 변경하여 시각적으로 구분
+  if (firstPoint.marker) {
+    firstPoint.marker.material.color.set(0x00ff00); // 초록색으로 변경
+  }
+  
+  console.log("영역이 닫혔습니다!");
+}
+
+// 마우스 이동 이벤트 핸들러
+function onMouseMove(event) {
+  if (!targetMesh || clickPoints.length === 0) return;
+  
+  // 화면 좌표를 정규화된 디바이스 좌표(NDC)로 변환
+  const rect = renderer.domElement.getBoundingClientRect();
+  const mouse = new THREE.Vector2(
+    ((event.clientX - rect.left) / rect.width) * 2 - 1,
+    -((event.clientY - rect.top) / rect.height) * 2 + 1
+  );
+
+  // 마우스 레이캐스터 생성
+  const raycaster = new THREE.Raycaster();
+  raycaster.setFromCamera(mouse, camera);
+  
+  // 이전 hover 상태 저장
+  const prevHoveredIndex = hoveredPointIndex;
+  hoveredPointIndex = -1;
+  
+  // 모든 점을 검사하여 마우스가 가까운 점 위에 있는지 확인
+  clickPoints.forEach((pointData, index) => {
+    if (pointData.marker) {
+      // 레이캐스터와 마커 간 거리 계산
+      const intersects = raycaster.intersectObject(pointData.marker);
+      if (intersects.length > 0) {
+        hoveredPointIndex = index;
+      }
+    }
+  });
+  
+  // hover 상태 변경 시 커서 스타일 업데이트
+  if (prevHoveredIndex !== hoveredPointIndex) {
+    if (hoveredPointIndex === 0 && clickPoints.length > 2 && !isDrawingClosed) {
+      // 첫 번째 점 위에 있고, 점이 3개 이상이고, 아직 닫히지 않은 경우 -> 선택 가능 표시
+      renderer.domElement.style.cursor = 'pointer';
+    } else if (hoveredPointIndex !== -1) {
+      // 다른 점 위에 있는 경우 -> 일반 hover 표시
+      renderer.domElement.style.cursor = 'crosshair';
+    } else {
+      // 점 위에 없는 경우 -> 기본 커서로 복원
+      renderer.domElement.style.cursor = 'auto';
+    }
+  }
 }
 
 // 클릭 이벤트 핸들러
@@ -142,6 +299,17 @@ function onClick(event) {
   );
 
   if (!targetMesh) return; // 모델이 로드되지 않은 경우
+
+  // 이미 닫힌 영역인 경우 새로운 점 추가 방지
+  if (isDrawingClosed) {
+    return;
+  }
+  
+  // 첫 번째 점을 클릭했는지 확인 (lasso 닫기)
+  if (hoveredPointIndex === 0 && clickPoints.length > 2) {
+    createClosedArea();
+    return;
+  }
 
   // Raycaster로 모델과의 교차점 계산
   const raycaster = new THREE.Raycaster();
@@ -156,62 +324,29 @@ function onClick(event) {
     let normal = intersect.face.normal.clone();
     normal.transformDirection(targetMesh.matrixWorld).normalize();
 
-    // 약간 오프셋하여 z-fighting 방지 (법선 방향으로 0.01 만큼 이동)
+    // 약간 오프셋하여 z-fighting 방지 (법선 방향으로 0.001 만큼 이동)
     point.addScaledVector(normal, 0.001);
 
     // 빨간 구체 마커 생성
-    const sphereGeom = new THREE.SphereGeometry(0.005, 8, 8);
-    const sphereMat  = new THREE.MeshBasicMaterial({ color: 0xff0000 });
+    const sphereGeom = new THREE.SphereGeometry(0.01, 16, 16); // 크기 조정
+    const sphereMat = new THREE.MeshBasicMaterial({ color: 0xff0000 });
     const marker = new THREE.Mesh(sphereGeom, sphereMat);
     marker.position.copy(point);
     scene.add(marker);
 
-    // 클릭한 점과 해당 법선 정보를 저장
-    clickPoints.push({ point: point, normal: normal });
+    // 클릭한 점과 해당 법선 정보 및 마커를 저장
+    clickPoints.push({ point: point, normal: normal, marker: marker });
 
-    // 두 번째 점이 추가되면 선(곡선) 생성
-    if (clickPoints.length === 2) {
-      // 기존 선이 있다면 제거
-      if (curveLine) {
-        scene.remove(curveLine);
-      }
-
-      // 두 점 사이를 N등분하여 표면상의 점들을 샘플링
-      const sampleCount = 20000;
-      const pointsOnSurface = [];
-      const { point: pointA, normal: normA } = clickPoints[0];
-      const { point: pointB, normal: normB } = clickPoints[1];
-
-      for (let i = 0; i <= sampleCount; i++) {
-        const t = i / sampleCount;
-        // 두 점 사이 선형 보간
-        let pos = new THREE.Vector3().lerpVectors(pointA, pointB, t);
-        // 두 점의 법선을 보간하여 방향 결정
-        let norm = new THREE.Vector3().lerpVectors(normA, normB, t).normalize();
-        // 보간점에서 약간 위쪽(법선 방향)에서부터 반대 방향으로 레이캐스트
-        const rayOrigin = pos.clone().addScaledVector(norm, 0.1);
-        const sampleRaycaster = new THREE.Raycaster(rayOrigin, norm.clone().negate());
-        const sampleIntersects = sampleRaycaster.intersectObject(targetMesh, true);
-        // 원하는 오프셋 값 (필요에 따라 값을 조정하세요)
-        const offset = 0.001;
-        
-        if (sampleIntersects.length > 0) {
-          pos = sampleIntersects[0].point.clone().addScaledVector(norm, offset);
-        } else {
-          pos.addScaledVector(norm, offset);
-        }
-        pointsOnSurface.push(pos);
-      }
-
-      // Catmull-Rom 커브를 이용해 부드러운 곡선 생성
-      const curve = new THREE.CatmullRomCurve3(pointsOnSurface);
-      const curvePoints = curve.getPoints(100);
-      const curveGeometry = new THREE.BufferGeometry().setFromPoints(curvePoints);
-      curveLine = new THREE.Line(curveGeometry, new THREE.LineBasicMaterial({ color: 0xff0000 }));
-      scene.add(curveLine);
-
-      // 선 생성 후 클릭한 점 배열 초기화 (다음 작업을 위해)
-      clickPoints = [];
+    // 두 번째 점부터는 이전 점과 현재 점 사이에 곡선 생성
+    if (clickPoints.length >= 2) {
+      const previousPoint = clickPoints[clickPoints.length - 2];
+      const currentPoint = clickPoints[clickPoints.length - 1];
+      
+      // 두 점 사이에 곡선 생성
+      const newCurveLine = createCurveBetweenPoints(previousPoint, currentPoint);
+      
+      // 생성된 곡선을 배열에 추가
+      curveLines.push(newCurveLine);
     }
   }
 }
