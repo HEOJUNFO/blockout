@@ -20,6 +20,11 @@ const params = {
   blockout: false,
   showOriginal: false,  // true이면 원본 모델만, false이면 블록아웃 후 모델만 표시
   showSurface: true,    // Surface visibility toggle
+  extrudeDistance: 0.01, // 기본 돌출 거리
+  performExtrude: function() {
+    // Extrude 기능 실행
+    extrudeSurface(params.extrudeDistance);
+  },
   clearPoints: function() {
     // 모든 점과 곡선 초기화
     clearAllPointsAndCurves();
@@ -31,7 +36,7 @@ const stlLoader = new STLLoader();
 const gui = new dat.GUI();
 
 // 배열 선언: 클릭한 점과 생성된 선(Line)을 저장
-let clickPoints = []; // { point, normal, marker } 형태
+let clickPoints = []; // { point, normal, clickDirection, marker } 형태
 let curveLines = []; // 생성된 선(Line) 객체들의 배열
 let closedArea = null; // 닫힌 영역을 저장할 변수
 let isDrawingClosed = false; // 닫힌 영역인지 여부
@@ -187,6 +192,182 @@ function createSurfaceFromClosedCurves() {
   return surfaceMesh;
 }
 
+// 생성된 곡면을 기준으로 extrude 처리하는 함수 - 수정된 버전
+function extrudeSurface(extrudeDistance) {
+  if (!closedArea) {
+    console.warn("Cannot extrude: no surface available");
+    return null;
+  }
+  
+  // 클릭 방향의 평균을 계산 (사용자 시점에서 모델 방향)
+  const averageClickDirection = new THREE.Vector3();
+  clickPoints.forEach(pointData => {
+    if (pointData.clickDirection) {
+      averageClickDirection.add(pointData.clickDirection);
+    }
+  });
+  
+  // 클릭 방향이 없으면 원본 법선 방향 사용
+  if (averageClickDirection.length() < 0.001) {
+    console.warn("No click direction found, falling back to normal direction");
+    // 기존 표면의 법선 방향 사용
+    const positions = closedArea.geometry.getAttribute('position');
+    const normals = closedArea.geometry.getAttribute('normal');
+    for (let i = 0; i < positions.count; i++) {
+      averageClickDirection.add(
+        new THREE.Vector3(
+          normals.getX(i),
+          normals.getY(i),
+          normals.getZ(i)
+        )
+      );
+    }
+  }
+  
+  // 정규화
+  averageClickDirection.normalize();
+  
+  // 클릭 방향을 거꾸로하여 모델 안쪽으로 향하게 함 (사용자가 모델을 보는 방향에서 반대 방향)
+  // 이렇게 해야 사용자가 점을 찍는 방향과 동일한 방향으로 extrude됨
+  averageClickDirection.negate();
+  
+  console.log("Extrude direction:", averageClickDirection);
+  
+  // 기존 표면 지오메트리에서 정점과 법선 가져오기
+  const positions = closedArea.geometry.getAttribute('position');
+  const normals = closedArea.geometry.getAttribute('normal');
+  const indices = closedArea.geometry.getIndex();
+  
+  if (!positions || !normals || !indices) {
+    console.error("Surface geometry is missing required attributes");
+    return null;
+  }
+  
+  // 새로운 extrude된 메시를 위한 지오메트리 생성
+  const extrudeGeometry = new THREE.BufferGeometry();
+  
+  // 정점 복사 (기존 표면 + extrude된 표면)
+  const vertexCount = positions.count;
+  const vertices = new Float32Array(vertexCount * 2 * 3); // 각 정점은 x,y,z 좌표를 가짐 (기존 + 돌출 표면)
+  
+  // 기존 표면의 정점 복사
+  for (let i = 0; i < vertexCount; i++) {
+    const x = positions.getX(i);
+    const y = positions.getY(i);
+    const z = positions.getZ(i);
+    
+    // 기존 정점 복사
+    vertices[i * 3] = x;
+    vertices[i * 3 + 1] = y;
+    vertices[i * 3 + 2] = z;
+    
+    // 클릭 방향으로 돌출된 정점 생성
+    // 법선 방향 대신 클릭 방향을 사용
+    vertices[(i + vertexCount) * 3] = x + averageClickDirection.x * extrudeDistance;
+    vertices[(i + vertexCount) * 3 + 1] = y + averageClickDirection.y * extrudeDistance;
+    vertices[(i + vertexCount) * 3 + 2] = z + averageClickDirection.z * extrudeDistance;
+  }
+  
+  // 정점 속성 설정
+  extrudeGeometry.setAttribute('position', new THREE.BufferAttribute(vertices, 3));
+  
+  // 기존 표면의 인덱스 카운트
+  const indexCount = indices.count;
+  const indexArray = indices.array;
+  
+  // 새로운 인덱스 배열 (기존 표면 + 돌출된 표면 + 측면)
+  const newIndices = [];
+  
+  // 기존 표면의 인덱스 복사 (뒤집지 않음)
+  for (let i = 0; i < indexCount; i += 3) {
+    const a = indexArray[i];
+    const b = indexArray[i + 1];
+    const c = indexArray[i + 2];
+    
+    newIndices.push(a, b, c);
+  }
+  
+  // 돌출된 표면의 인덱스 (법선 방향이 반대로 가도록 정점 순서 반대로)
+  for (let i = 0; i < indexCount; i += 3) {
+    const a = indexArray[i] + vertexCount;
+    const b = indexArray[i + 1] + vertexCount;
+    const c = indexArray[i + 2] + vertexCount;
+    
+    newIndices.push(c, b, a); // 역순으로 정렬하여 법선이 바깥쪽을 향하게 함
+  }
+  
+  // 측면 인덱스 생성 (원래 표면의 외곽선)
+  // 삼각형 인덱스에서 에지 찾기
+  const edges = new Map(); // 에지 맵: "v1,v2" => [count, face]
+  
+  // 모든 에지 찾기
+  for (let i = 0; i < indexCount; i += 3) {
+    const a = indexArray[i];
+    const b = indexArray[i + 1];
+    const c = indexArray[i + 2];
+    
+    // 에지 추가 (정점 인덱스가 작은 것이 먼저 오도록)
+    const addEdge = (v1, v2) => {
+      const key = v1 < v2 ? `${v1},${v2}` : `${v2},${v1}`;
+      if (!edges.has(key)) {
+        edges.set(key, { count: 1, v1, v2 });
+      } else {
+        const edge = edges.get(key);
+        edge.count += 1;
+      }
+    };
+    
+    addEdge(a, b);
+    addEdge(b, c);
+    addEdge(c, a);
+  }
+  
+  // 외곽선 에지만 선택 (한 번만 사용된 에지)
+  const outlineEdges = [];
+  for (const edge of edges.values()) {
+    if (edge.count === 1) {
+      outlineEdges.push(edge);
+    }
+  }
+  
+  // 외곽선 에지를 따라 측면 삼각형 생성
+  for (const edge of outlineEdges) {
+    const { v1, v2 } = edge;
+    const v3 = v1 + vertexCount;
+    const v4 = v2 + vertexCount;
+    
+    // 사각형을 2개의 삼각형으로 분할
+    newIndices.push(v1, v2, v3);
+    newIndices.push(v2, v4, v3);
+  }
+  
+  // 인덱스 설정
+  extrudeGeometry.setIndex(newIndices);
+  
+  // 법선 계산
+  extrudeGeometry.computeVertexNormals();
+  
+  // 메시 생성
+  const extrudeMaterial = new THREE.MeshStandardMaterial({
+    color: 0x2288ff,  // 파란색 계열
+    side: THREE.DoubleSide,
+    flatShading: false,
+    metalness: 0.1,
+    roughness: 0.6,
+  });
+  
+  const extrudeMesh = new THREE.Mesh(extrudeGeometry, extrudeMaterial);
+  
+  // 기존 표면 제거 및 새 메시 추가
+  scene.remove(closedArea);
+  scene.add(extrudeMesh);
+  
+  // 메시 참조 업데이트
+  closedArea = extrudeMesh;
+  
+  return extrudeMesh;
+}
+
 // 초기화 함수
 function init() {
   renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -194,7 +375,18 @@ function init() {
   document.body.appendChild(renderer.domElement);
 
   scene = new THREE.Scene();
-  scene.add(new THREE.AmbientLight(0xffffff, 0.6));
+  
+  // 더 나은 조명을 위해 lights 추가
+  scene.add(new THREE.AmbientLight(0xffffff, 0.4));
+  
+  // 방향성 조명 추가
+  const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+  directionalLight.position.set(1, 1, 1);
+  scene.add(directionalLight);
+  
+  const directionalLight2 = new THREE.DirectionalLight(0xffffff, 0.4);
+  directionalLight2.position.set(-1, 0.5, -1);
+  scene.add(directionalLight2);
 
   camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 50);
   camera.position.set(0, 0, 3);
@@ -221,13 +413,7 @@ function init() {
   document.body.appendChild(stats.dom);
 
   // GUI 설정
-  gui.add(params, 'matcap', Object.keys(matcaps)).name('Material');
-  gui.add(params, 'clearPoints').name('Clear All Points');
-  gui.add(params, 'showSurface').name('Show Surface').onChange(value => {
-    if (closedArea) {
-      closedArea.visible = value;
-    }
-  });
+  setupGUI();
 
   window.addEventListener('resize', () => {
     camera.aspect = window.innerWidth / window.innerHeight;
@@ -273,6 +459,24 @@ function init() {
   renderer.domElement.addEventListener('mousemove', onMouseMove, false);
 
   render();
+}
+
+// GUI 설정 함수
+function setupGUI() {
+  gui.add(params, 'matcap', Object.keys(matcaps)).name('Material');
+  gui.add(params, 'showSurface').name('Show Surface').onChange(value => {
+    if (closedArea) {
+      closedArea.visible = value;
+    }
+  });
+  
+  // Extrude 관련 폴더 추가
+  const extrudeFolder = gui.addFolder('Extrude Options');
+  extrudeFolder.add(params, 'extrudeDistance', 0.01, 0.5).step(0.01).name('Extrude Distance');
+  extrudeFolder.add(params, 'performExtrude').name('Perform Extrude');
+  extrudeFolder.open(); // 폴더를 기본적으로 열어둠
+  
+  gui.add(params, 'clearPoints').name('Clear All');
 }
 
 // 두 점 사이에 곡선 생성 함수
@@ -388,7 +592,7 @@ function onMouseMove(event) {
   }
 }
 
-// 클릭 이벤트 핸들러
+// 클릭 이벤트 핸들러 - 수정된 버전
 function onClick(event) {
   // 화면 좌표를 정규화된 디바이스 좌표(NDC)로 변환
   const rect = renderer.domElement.getBoundingClientRect();
@@ -422,19 +626,27 @@ function onClick(event) {
     // face.normal은 로컬 좌표이므로 월드 좌표로 변환
     let normal = intersect.face.normal.clone();
     normal.transformDirection(targetMesh.matrixWorld).normalize();
+    
+    // 클릭 방향 저장 (카메라에서 점까지의 방향)
+    const clickDirection = new THREE.Vector3().subVectors(point, camera.position).normalize();
 
     // 약간 오프셋하여 z-fighting 방지 (법선 방향으로 0.001 만큼 이동)
     point.addScaledVector(normal, 0.001);
 
     // 빨간 구체 마커 생성
-    const sphereGeom = new THREE.SphereGeometry(0.01, 16, 16); // 크기 조정
+    const sphereGeom = new THREE.SphereGeometry(0.003, 16, 16); // 크기 조정
     const sphereMat = new THREE.MeshBasicMaterial({ color: 0xff0000 });
     const marker = new THREE.Mesh(sphereGeom, sphereMat);
     marker.position.copy(point);
     scene.add(marker);
 
-    // 클릭한 점과 해당 법선 정보 및 마커를 저장
-    clickPoints.push({ point: point, normal: normal, marker: marker });
+    // 클릭한 점과 해당 법선 정보, 클릭 방향, 마커를 저장
+    clickPoints.push({ 
+      point: point, 
+      normal: normal, 
+      clickDirection: clickDirection, // 클릭 방향 저장 추가
+      marker: marker 
+    });
 
     // 두 번째 점부터는 이전 점과 현재 점 사이에 곡선 생성
     if (clickPoints.length >= 2) {
