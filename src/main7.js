@@ -109,7 +109,7 @@ function detectUndercuts() {
   const undercutNormals = [];
   
   let triangleCount = indexAttr ? indexAttr.count / 3 : posAttr.count / 3;
-  const threshold = (detectCount === 0) ? 0.1 : 0.0;
+  const threshold = (detectCount === 0) ? 0.01 : 0.0;
   
   for (let i = 0; i < triangleCount; i++) {
     let a, b, c;

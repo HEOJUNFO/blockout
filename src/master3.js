@@ -20,7 +20,7 @@ const params = {
   blockout: false,
   showOriginal: false,  // true이면 원본 모델만, false이면 블록아웃 후 모델만 표시
   showSurface: true,    // Surface visibility toggle
-  extrudeDistance: 0.015, // 기본 돌출 거리
+  extrudeDistance: 0.02, // 기본 돌출 거리
   performExtrude: function() {
     // Extrude 기능 실행
     extrudeSurface(params.extrudeDistance);
