@@ -637,12 +637,15 @@ function onMouseMove(event) {
   
   // hover 상태 변경 시 커서 스타일 업데이트
   if (prevHoveredIndex !== hoveredPointIndex) {
-    if (hoveredPointIndex !== -1) {
-      // 점 위에 있는 경우 (닫힌 영역 있든 없든)
-      renderer.domElement.style.cursor = 'move'; // 드래그 가능한 커서로 변경
+    if (hoveredPointIndex > 0 && !isDrawingClosed) {
+      // 중간 점 위에 있고 닫힌 영역이 아닌 경우 -> 삭제 가능 표시
+      renderer.domElement.style.cursor = 'cell'; // 셀 선택 커서로 변경 (scissors가 없어서 대체)
     } else if (hoveredPointIndex === 0 && clickPoints.length > 2 && !isDrawingClosed) {
       // 첫 번째 점 위에 있고, 점이 3개 이상이고, 아직 닫히지 않은 경우 -> 선택 가능 표시
       renderer.domElement.style.cursor = 'pointer';
+    } else if (hoveredPointIndex !== -1 && isDrawingClosed) {
+      // 점 위에 있고 닫힌 영역인 경우 -> 드래그 가능 표시
+      renderer.domElement.style.cursor = 'move';
     } else if (isDrawing) {
       // 그리기 모드일 때
       renderer.domElement.style.cursor = 'crosshair';
@@ -681,7 +684,7 @@ function onMouseMove(event) {
   }
 }
 
-// 클릭 이벤트 핸들러 - 영역 닫기용
+// 클릭 이벤트 핸들러 - 영역 닫기용 또는 점 제거용
 function onClick(event) {
   // 드래그 중이었다면 클릭 처리 안함 (드래그 종료로 처리)
   if (isDraggingPoint) {
@@ -694,7 +697,42 @@ function onClick(event) {
   // 첫 번째 점을 클릭했는지 확인 (lasso 닫기)
   if (hoveredPointIndex === 0 && clickPoints.length > 2) {
     createClosedArea();
+    return;
   }
+  
+  // 점을 클릭했고, 닫힌 영역이 아닌 경우 해당 점까지 유지하고 이후 점들 삭제
+  if (hoveredPointIndex > 0 && !isDrawingClosed) {
+    trimPointsAndLines(hoveredPointIndex);
+  }
+}
+
+// 선택한 점 이후의 점과 선들을 제거하는 함수
+function trimPointsAndLines(pointIndex) {
+  if (pointIndex < 1 || pointIndex >= clickPoints.length - 1) return;
+  
+  // pointIndex + 1부터 끝까지의 점들 제거
+  for (let i = clickPoints.length - 1; i > pointIndex; i--) {
+    // 점 마커 제거
+    if (clickPoints[i].marker) {
+      scene.remove(clickPoints[i].marker);
+    }
+    
+    // 점 제거
+    clickPoints.splice(i, 1);
+  }
+  
+  // 선 제거 (점 제거 후에 수행)
+  // 선은 pointIndex부터 끝까지 제거
+  for (let i = curveLines.length - 1; i >= pointIndex; i--) {
+    scene.remove(curveLines[i]);
+    curveLines.splice(i, 1);
+  }
+  
+  // 호버 상태 업데이트
+  hoveredPointIndex = -1;
+  
+  console.log(`${pointIndex}번 점 이후의 점과 선들이 제거되었습니다.`);
+  console.log(`남은 점: ${clickPoints.length}개, 남은 선: ${curveLines.length}개`);
 }
 
 // 마우스 업 이벤트 핸들러
