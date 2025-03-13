@@ -262,7 +262,7 @@ function createSurfaceFromClosedCurves() {
   });
   
   const surfaceMesh = new THREE.Mesh(surfaceGeometry, surfaceMaterial);
-  scene.add(surfaceMesh);
+  //scene.add(surfaceMesh);
   
   // Store the surface mesh for future reference
   closedArea = surfaceMesh;
