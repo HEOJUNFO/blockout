@@ -304,14 +304,10 @@ function createSurfaceFromClosedCurves() {
   geometry.setIndex(indices);
   
   // 8. Create material
-  const surfaceMaterial = new THREE.MeshStandardMaterial({
-    color: 0x00ff00,
+  const surfaceMaterial = new THREE.MeshMatcapMaterial({
+    matcap: matcaps['Red Wax'],
     side: THREE.DoubleSide,
-    flatShading: false,
-    metalness: 0.0,
-    roughness: 0.5,
-    transparent: true,
-    opacity: 0.7
+    flatShading: false
   });
   
   // 9. Create mesh
