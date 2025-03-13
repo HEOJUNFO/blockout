@@ -21,6 +21,7 @@ const params = {
   showOriginal: false,
   showSurface: true,
   extrudeDistance: 0.02,
+  curveQuality: 20, // 곡선 품질 파라미터
   performExtrude: function() {
     extrudeSurface(params.extrudeDistance);
   },
@@ -110,6 +111,71 @@ function setTargetMeshGeometry(geometry) {
   targetMesh = new THREE.Mesh(geometry, material);
   scene.add(targetMesh);
   targetMesh.position.set(0, 0, 0);
+}
+
+// 두 점 사이에 모델 표면을 따라 곡선 생성 함수
+function createCurveBetweenPoints(pointA, pointB) {
+  const { point: pointAPos, normal: normA } = pointA;
+  const { point: pointBPos, normal: normB } = pointB;
+  
+  // 두 점 사이의 거리에 따라 샘플 수 조정
+  const distance = pointAPos.distanceTo(pointBPos);
+  // 기본 샘플 수
+  const baseSampleCount = params.curveQuality; 
+  // 거리에 따라 샘플 수 조정 (최소 20개)
+  const sampleCount = Math.max(baseSampleCount, Math.floor(distance * 500));
+  
+  // 표면상의 점들 샘플링
+  const pointsOnSurface = [];
+
+  for (let i = 0; i <= sampleCount; i++) {
+    const t = i / sampleCount;
+    // 두 점 사이 선형 보간
+    let pos = new THREE.Vector3().lerpVectors(pointAPos, pointBPos, t);
+    // 두 점의 법선을 보간하여 방향 결정
+    let norm = new THREE.Vector3().lerpVectors(normA, normB, t).normalize();
+    // 보간점에서 약간 위쪽(법선 방향)에서부터 반대 방향으로 레이캐스트
+    const rayOrigin = pos.clone().addScaledVector(norm, 0.1);
+    const sampleRaycaster = new THREE.Raycaster(rayOrigin, norm.clone().negate());
+    const sampleIntersects = sampleRaycaster.intersectObject(targetMesh, true);
+    // 원하는 오프셋 값
+    const offset = 0.001;
+    
+    if (sampleIntersects.length > 0) {
+      // 레이캐스트 히트 포인트를 사용하고 법선 방향으로 약간 오프셋
+      let hitNormal = sampleIntersects[0].face.normal.clone();
+      hitNormal.transformDirection(targetMesh.matrixWorld);
+      pos = sampleIntersects[0].point.clone().addScaledVector(hitNormal, offset);
+    } else {
+      // 레이캐스트 실패 시 기존 보간점을 사용하고 보간된 법선 방향으로 오프셋
+      pos.addScaledVector(norm, offset);
+    }
+    pointsOnSurface.push(pos);
+  }
+
+  // 샘플링된 점이 너무 많으면 간소화 (성능 최적화)
+  const simplifiedPoints = [];
+  const simplificationFactor = Math.max(1, Math.floor(pointsOnSurface.length / 100));
+  for (let i = 0; i < pointsOnSurface.length; i += simplificationFactor) {
+    simplifiedPoints.push(pointsOnSurface[i]);
+  }
+  // 끝점 추가 (간소화 과정에서 빠질 수 있음)
+  if (simplifiedPoints[simplifiedPoints.length - 1] !== pointsOnSurface[pointsOnSurface.length - 1]) {
+    simplifiedPoints.push(pointsOnSurface[pointsOnSurface.length - 1]);
+  }
+
+  // Catmull-Rom 커브를 이용해 부드러운 곡선 생성
+  const curve = new THREE.CatmullRomCurve3(simplifiedPoints);
+  const curvePoints = curve.getPoints(50); // 최종 표시용 점 개수
+  const curveGeometry = new THREE.BufferGeometry().setFromPoints(curvePoints);
+  const lineMaterial = new THREE.LineBasicMaterial({ 
+    color: (pointA === clickPoints[clickPoints.length - 1] && pointB === clickPoints[0]) ? 0x00ff00 : 0xff0000 
+  });
+  const curveLine = new THREE.Line(curveGeometry, lineMaterial);
+  scene.add(curveLine);
+  
+  // 생성된 곡선 반환
+  return curveLine;
 }
 
 // Function to create a surface from the closed area curves
@@ -358,12 +424,10 @@ function extrudeSurface(extrudeDistance) {
   extrudeGeometry.computeVertexNormals();
   
   // 메시 생성
-  const extrudeMaterial = new THREE.MeshStandardMaterial({
-    color: 0x2288ff,  // 파란색 계열
+  const extrudeMaterial = new THREE.MeshMatcapMaterial({
+    matcap: matcaps['Red Wax'],
     side: THREE.DoubleSide,
-    flatShading: false,
-    metalness: 0.1,
-    roughness: 0.6,
+    flatShading: false
   });
   
   const extrudeMesh = new THREE.Mesh(extrudeGeometry, extrudeMaterial);
@@ -474,6 +538,14 @@ function setupGUI() {
   gui.add(params, 'showSurface').name('Show Surface').onChange(value => {
     if (closedArea) {
       closedArea.visible = value;
+    }
+  });
+  
+  // 곡선 품질 조절 옵션 추가
+  gui.add(params, 'curveQuality', 5, 50).step(1).name('Curve Quality').onChange(() => {
+    // 모든 곡선을 업데이트 (닫혀 있다면 표면도 업데이트)
+    if (clickPoints.length >= 2) {
+      updateAllCurves();
     }
   });
   
@@ -661,7 +733,7 @@ function onMouseMove(event) {
   // 드래그 중이면 점 추가
   if (isDrawing) {
     // 마우스가 충분히 이동했는지 확인 (필터링)
-    if (mouse.distanceTo(lastMousePosition) > 0.005) {
+    if (mouse.distanceTo(lastMousePosition) > 0.025) {
       lastMousePosition.copy(mouse);
       
       const intersects = raycaster.intersectObject(targetMesh, true);
@@ -803,32 +875,28 @@ function updateConnectedLines(index) {
   
   // 이전 점과의 선 업데이트 (첫 번째 점이 아닌 경우)
   if (index > 0) {
-    const prevIndex = index - 1;
-    updateLine(prevIndex, index);
+    updateCurveBetweenPoints(index - 1, index);
   } else if (isDrawingClosed) {
     // 첫 번째 점이고 영역이 닫혔으면 마지막 점과의 선 업데이트
-    updateLine(pointsCount - 1, 0);
+    updateCurveBetweenPoints(pointsCount - 1, 0);
   }
   
   // 다음 점과의 선 업데이트 (마지막 점이 아닌 경우)
   if (index < pointsCount - 1) {
-    updateLine(index, index + 1);
+    updateCurveBetweenPoints(index, index + 1);
   } else if (isDrawingClosed) {
     // 마지막 점이고 영역이 닫혔으면 첫 번째 점과의 선 업데이트
-    updateLine(pointsCount - 1, 0);
+    updateCurveBetweenPoints(pointsCount - 1, 0);
   }
 }
 
-// 두 점 사이의 선을 업데이트하는 함수
-function updateLine(startIndex, endIndex) {
+// 두 점 사이의 곡선을 업데이트하는 함수
+function updateCurveBetweenPoints(startIndex, endIndex) {
   // 인덱스가 유효한지 확인
   if (startIndex < 0 || startIndex >= clickPoints.length || 
       endIndex < 0 || endIndex >= clickPoints.length) {
     return;
   }
-  
-  const startPoint = clickPoints[startIndex].point;
-  const endPoint = clickPoints[endIndex].point;
   
   // 곡선 라인 인덱스 찾기
   let lineIndex = -1;
@@ -846,16 +914,36 @@ function updateLine(startIndex, endIndex) {
     // 기존 선 제거
     scene.remove(curveLines[lineIndex]);
     
-    // 새 선 생성
-    const lineGeometry = new THREE.BufferGeometry().setFromPoints([startPoint, endPoint]);
-    const lineMaterial = new THREE.LineBasicMaterial({ 
-      color: (startIndex === clickPoints.length - 1 && endIndex === 0) ? 0x00ff00 : 0xff0000 
-    });
-    const line = new THREE.Line(lineGeometry, lineMaterial);
-    scene.add(line);
+    // 새 곡선 생성
+    const curveLine = createCurveBetweenPoints(clickPoints[startIndex], clickPoints[endIndex]);
     
     // 배열에서 선 교체
-    curveLines[lineIndex] = line;
+    curveLines[lineIndex] = curveLine;
+  }
+}
+
+// 모든 곡선을 업데이트하는 함수
+function updateAllCurves() {
+  // 기존의 모든 곡선 제거
+  curveLines.forEach(line => {
+    scene.remove(line);
+  });
+  curveLines = [];
+  
+  // 모든 점 사이에 새 곡선 생성
+  for (let i = 0; i < clickPoints.length - 1; i++) {
+    const curveLine = createCurveBetweenPoints(clickPoints[i], clickPoints[i + 1]);
+    curveLines.push(curveLine);
+  }
+  
+  // 닫힌 영역이면 마지막 점과 첫 점 사이에도 곡선 생성
+  if (isDrawingClosed) {
+    const lastIndex = clickPoints.length - 1;
+    const curveLine = createCurveBetweenPoints(clickPoints[lastIndex], clickPoints[0]);
+    curveLines.push(curveLine);
+    
+    // 표면 업데이트
+    updateSurface();
   }
 }
 
@@ -905,23 +993,16 @@ function addPointAtIntersection(intersect) {
   
   clickPoints.push(newPointData);
   
-  // 두 번째 점부터는 이전 점과 현재 점 사이에 직접 연결
+  // 두 번째 점부터는 이전 점과 현재 점 사이에 곡선 생성
   if (clickPoints.length >= 2) {
     const previousPoint = clickPoints[clickPoints.length - 2];
     const currentPoint = clickPoints[clickPoints.length - 1];
     
-    // 두 점 사이에 직접 연결하는 선 생성
-    const lineGeometry = new THREE.BufferGeometry().setFromPoints([
-      previousPoint.point,
-      currentPoint.point
-    ]);
-    
-    const lineMaterial = new THREE.LineBasicMaterial({ color: 0xff0000 });
-    const line = new THREE.Line(lineGeometry, lineMaterial);
-    scene.add(line);
+    // 두 점 사이에 모델 표면을 따라 곡선 생성
+    const curveLine = createCurveBetweenPoints(previousPoint, currentPoint);
     
     // 생성된 선을 배열에 추가
-    curveLines.push(line);
+    curveLines.push(curveLine);
   }
 }
 
@@ -932,18 +1013,12 @@ function createClosedArea() {
     scene.remove(closedArea);
   }
   
-  // 마지막 점과 첫 번째 점 사이에 직접 연결하는 선 생성
+  // 마지막 점과 첫 번째 점 사이에 곡선 생성
   const firstPoint = clickPoints[0];
   const lastPoint = clickPoints[clickPoints.length - 1];
   
-  const lineGeometry = new THREE.BufferGeometry().setFromPoints([
-    lastPoint.point,
-    firstPoint.point
-  ]);
-  
-  const lineMaterial = new THREE.LineBasicMaterial({ color: 0x00ff00 }); // 닫는 선은 초록색
-  const closingLine = new THREE.Line(lineGeometry, lineMaterial);
-  scene.add(closingLine);
+  // 마지막 점과 첫 번째 점 사이에 모델 표면을 따라 곡선 생성
+  const closingLine = createCurveBetweenPoints(lastPoint, firstPoint);
   
   // 생성된 선을 배열에 추가
   curveLines.push(closingLine);
