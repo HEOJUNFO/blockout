@@ -42,7 +42,7 @@ let isDrawingClosed = false;
 
 // 마우스 관련 변수
 let isDrawing = false;
-let minDistanceBetweenPoints = 0.025;
+let minDistanceBetweenPoints = 0.01;
 let hoveredPointIndex = -1;
 let lastMousePosition = new THREE.Vector2();
 
@@ -626,14 +626,22 @@ function onKeyUp(event) {
   }
 }
 
-// 마우스 다운 이벤트 핸들러
+// 마우스 다운 이벤트 핸들러 - 수정됨
 function onMouseDown(event) {
   // 1. 닫힌 영역이 있고 점 위에 마우스가 있으면 드래그 모드 시작
   if (isDrawingClosed && hoveredPointIndex !== -1) {
+    // 이벤트 처리 중지
+    event.preventDefault();
+    
+    // TrackballControls 즉시 비활성화 (중요)
+    controls.enabled = false;
+    
     selectedPointIndex = hoveredPointIndex;
     isDraggingPoint = true;
-    controls.enabled = false;
     return;
+  } else {
+    // 드래그 중이 아니라면 컨트롤 활성화
+    controls.enabled = true;
   }
   
   // 2. Alt 키를 누른 상태에서 그리기 모드 시작
@@ -733,7 +741,7 @@ function onMouseMove(event) {
   // 드래그 중이면 점 추가
   if (isDrawing) {
     // 마우스가 충분히 이동했는지 확인 (필터링)
-    if (mouse.distanceTo(lastMousePosition) > 0.025) {
+    if (mouse.distanceTo(lastMousePosition) > 0.01) {
       lastMousePosition.copy(mouse);
       
       const intersects = raycaster.intersectObject(targetMesh, true);
@@ -807,19 +815,19 @@ function trimPointsAndLines(pointIndex) {
   console.log(`남은 점: ${clickPoints.length}개, 남은 선: ${curveLines.length}개`);
 }
 
-// 마우스 업 이벤트 핸들러
+// 마우스 업 이벤트 핸들러 - 수정됨
 function onMouseUp(event) {
   // 점 드래그 종료
   if (isDraggingPoint) {
+    // 점 드래그 상태 종료
     isDraggingPoint = false;
+    selectedPointIndex = -1;
     
     // 표면 업데이트
     if (isDrawingClosed) {
       updateSurface();
     }
     
-    // 컨트롤 다시 활성화
-    controls.enabled = true;
     return;
   }
   
@@ -827,11 +835,13 @@ function onMouseUp(event) {
     isDrawing = false;
     console.log(`그리기 완료: ${clickPoints.length}개 점 생성됨`);
     
-    // Alt 키가 계속 눌려있으면 컨트롤은 계속 비활성화 유지
     if (isAltKeyDown) {
       controls.enabled = false;
     } else {
-      controls.enabled = true;
+      // 여기도 지연 적용
+      setTimeout(() => {
+        controls.enabled = true;
+      }, 50);
     }
   }
 }
@@ -1029,8 +1039,10 @@ function createClosedArea() {
   // Create the surface mesh
   createSurfaceFromClosedCurves();
   
-  // 컨트롤 다시 활성화
-  controls.enabled = true;
+  // 컨트롤 다시 활성화 - 지연 추가
+  setTimeout(() => {
+    controls.enabled = true;
+  }, 50);
   
   console.log("영역이 닫혔습니다!");
 }
