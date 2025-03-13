@@ -20,11 +20,8 @@ const params = {
   blockout: false,
   showOriginal: false,
   showSurface: true,
-  extrudeDistance: 0.02,
+  thickness: 0.05, // Adding thickness parameter with default value
   curveQuality: 20, // 곡선 품질 파라미터
-  performExtrude: function() {
-    extrudeSurface(params.extrudeDistance);
-  },
   clearPoints: function() {
     clearAllPointsAndCurves();
   }
@@ -233,9 +230,9 @@ function createSurfaceFromClosedCurves() {
   // 5. Triangulate the 2D polygon
   const triangles = triangulate2DPolygon(boundary2D);
   
-  // 6. Create 3D vertices for the triangulation
-  const positions = new Float32Array(triangles.length * 3);
-  const normals = new Float32Array(triangles.length * 3);
+  // 6. Create 3D vertices for the triangulation - for the front face
+  const frontPositions = new Float32Array(triangles.length * 3);
+  const frontNormals = new Float32Array(triangles.length * 3);
   
   // Map from original point indices to vertices with normals from raycasting
   const vertexMap = new Map();
@@ -281,40 +278,159 @@ function createSurfaceFromClosedCurves() {
       vertexMap.set(key, vertex3D);
     }
     
-    // Set position and normal
-    positions[i * 3] = vertex3D.position.x;
-    positions[i * 3 + 1] = vertex3D.position.y;
-    positions[i * 3 + 2] = vertex3D.position.z;
+    // Set position and normal for front face
+    frontPositions[i * 3] = vertex3D.position.x;
+    frontPositions[i * 3 + 1] = vertex3D.position.y;
+    frontPositions[i * 3 + 2] = vertex3D.position.z;
     
-    normals[i * 3] = vertex3D.normal.x;
-    normals[i * 3 + 1] = vertex3D.normal.y;
-    normals[i * 3 + 2] = vertex3D.normal.z;
+    frontNormals[i * 3] = vertex3D.normal.x;
+    frontNormals[i * 3 + 1] = vertex3D.normal.y;
+    frontNormals[i * 3 + 2] = vertex3D.normal.z;
   }
   
-  // 7. Create geometry
+  // 7. Create back face positions by offsetting front face along normals
+  const backPositions = new Float32Array(frontPositions.length);
+  const backNormals = new Float32Array(frontNormals.length);
+  
+  for (let i = 0; i < frontPositions.length; i += 3) {
+    const nx = frontNormals[i];
+    const ny = frontNormals[i + 1];
+    const nz = frontNormals[i + 2];
+    
+    // Offset along normal by thickness amount
+    backPositions[i] = frontPositions[i] + nx * params.thickness;
+    backPositions[i + 1] = frontPositions[i + 1] + ny * params.thickness;
+    backPositions[i + 2] = frontPositions[i + 2] + nz * params.thickness;
+    
+    // Invert normals for back face
+    backNormals[i] = -nx;
+    backNormals[i + 1] = -ny;
+    backNormals[i + 2] = -nz;
+  }
+  
+  // 동적 배열을 사용하여 정점과 법선 수집
+  const positionArray = [];
+  const normalArray = [];
+  
+  // 전면 정점 추가
+  for (let i = 0; i < frontPositions.length; i++) {
+    positionArray.push(frontPositions[i]);
+    normalArray.push(frontNormals[i]);
+  }
+  
+  // 후면 정점 추가
+  for (let i = 0; i < backPositions.length; i++) {
+    positionArray.push(backPositions[i]);
+    normalArray.push(backNormals[i]);
+  }
+  
+  // 삼각형 인덱스를 구성하여 전면과 후면을 채움
+  const frontFaceCount = triangles.length / 3;
+  const vertexCount = frontPositions.length / 3;
+  
+  // 측면 벽 생성
+  const edgeMap = new Map(); // 가장자리를 추적하기 위한 맵
+  
+  // 전면 면의 가장자리 찾기
+  for (let i = 0; i < frontFaceCount; i++) {
+    const idx0 = i * 3;
+    const idx1 = idx0 + 1;
+    const idx2 = idx0 + 2;
+    
+    // 세 변 검사
+    addEdge(idx0, idx1);
+    addEdge(idx1, idx2);
+    addEdge(idx2, idx0);
+  }
+  
+  // 가장자리 추가 헬퍼 함수
+  function addEdge(a, b) {
+    const edgeKey = a < b ? `${a}-${b}` : `${b}-${a}`;
+    
+    if (edgeMap.has(edgeKey)) {
+      // 내부 가장자리는 제거 (두 번 나타남)
+      edgeMap.delete(edgeKey);
+    } else {
+      // 새 가장자리 추가
+      edgeMap.set(edgeKey, [a, b]);
+    }
+  }
+  
+  // 남은 가장자리는 경계 가장자리
+  for (const [key, [a, b]] of edgeMap.entries()) {
+    // 전면 정점
+    const ax = frontPositions[a * 3];
+    const ay = frontPositions[a * 3 + 1];
+    const az = frontPositions[a * 3 + 2];
+    
+    const bx = frontPositions[b * 3];
+    const by = frontPositions[b * 3 + 1];
+    const bz = frontPositions[b * 3 + 2];
+    
+    // 후면 정점 (전면 + vertexCount)
+    const cx = backPositions[a * 3];
+    const cy = backPositions[a * 3 + 1];
+    const cz = backPositions[a * 3 + 2];
+    
+    const dx = backPositions[b * 3];
+    const dy = backPositions[b * 3 + 1];
+    const dz = backPositions[b * 3 + 2];
+    
+    // 벽 법선 계산 (전면과 가장자리 방향에 수직)
+    const edgeDir = new THREE.Vector3(
+      bx - ax,
+      by - ay,
+      bz - az
+    ).normalize();
+    
+    const faceNormal = new THREE.Vector3(
+      frontNormals[a * 3],
+      frontNormals[a * 3 + 1],
+      frontNormals[a * 3 + 2]
+    );
+    
+    const wallNormal = new THREE.Vector3().crossVectors(edgeDir, faceNormal).normalize();
+    
+    // 첫 번째 삼각형: a, b, c
+    positionArray.push(ax, ay, az);
+    positionArray.push(bx, by, bz);
+    positionArray.push(cx, cy, cz);
+    
+    for (let i = 0; i < 3; i++) {
+      normalArray.push(wallNormal.x, wallNormal.y, wallNormal.z);
+    }
+    
+    // 두 번째 삼각형: b, d, c
+    positionArray.push(bx, by, bz);
+    positionArray.push(dx, dy, dz);
+    positionArray.push(cx, cy, cz);
+    
+    for (let i = 0; i < 3; i++) {
+      normalArray.push(wallNormal.x, wallNormal.y, wallNormal.z);
+    }
+  }
+  
+  // 수집된 데이터로 Float32Array 생성
+  const positions = new Float32Array(positionArray);
+  const normals = new Float32Array(normalArray);
+  
+  // 단일 지오메트리 생성
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
   geometry.setAttribute('normal', new THREE.BufferAttribute(normals, 3));
   
-  // Create triangle faces - every 3 vertices form a triangle
-  const indices = [];
-  for (let i = 0; i < triangles.length; i += 3) {
-    indices.push(i, i + 1, i + 2);
-  }
-  geometry.setIndex(indices);
-  
-  // 8. Create material
+  // 재질 생성
   const surfaceMaterial = new THREE.MeshMatcapMaterial({
     matcap: matcaps['Red Wax'],
-    side: THREE.DoubleSide,
+    side: THREE.FrontSide,
     flatShading: false
   });
   
-  // 9. Create mesh
+  // 메시 생성
   const surfaceMesh = new THREE.Mesh(geometry, surfaceMaterial);
   scene.add(surfaceMesh);
   
-  // Store for future reference
+  // 참조를 위해 저장
   closedArea = surfaceMesh;
   
   return surfaceMesh;
@@ -641,177 +757,7 @@ function isPointInPolygon(point, polygon) {
   
   return inside;
 }
-// 생성된 곡면을 기준으로 extrude 처리하는 함수
-function extrudeSurface(extrudeDistance) {
-  if (!closedArea) {
-    console.warn("Cannot extrude: no surface available");
-    return null;
-  }
-  
-  // 클릭 방향의 평균을 계산 (사용자 시점에서 모델 방향)
-  const averageClickDirection = new THREE.Vector3();
-  clickPoints.forEach(pointData => {
-    if (pointData.clickDirection) {
-      averageClickDirection.add(pointData.clickDirection);
-    }
-  });
-  
-  // 클릭 방향이 없으면 원본 법선 방향 사용
-  if (averageClickDirection.length() < 0.001) {
-    console.warn("No click direction found, falling back to normal direction");
-    // 기존 표면의 법선 방향 사용
-    const positions = closedArea.geometry.getAttribute('position');
-    const normals = closedArea.geometry.getAttribute('normal');
-    for (let i = 0; i < positions.count; i++) {
-      averageClickDirection.add(
-        new THREE.Vector3(
-          normals.getX(i),
-          normals.getY(i),
-          normals.getZ(i)
-        )
-      );
-    }
-  }
-  
-  // 정규화
-  averageClickDirection.normalize();
-  
-  // 클릭 방향을 거꾸로하여 모델 안쪽으로 향하게 함 (사용자가 모델을 보는 방향에서 반대 방향)
-  averageClickDirection.negate();
-  
-  console.log("Extrude direction:", averageClickDirection);
-  
-  // 기존 표면 지오메트리에서 정점과 법선 가져오기
-  const positions = closedArea.geometry.getAttribute('position');
-  const normals = closedArea.geometry.getAttribute('normal');
-  const indices = closedArea.geometry.getIndex();
-  
-  if (!positions || !normals || !indices) {
-    console.error("Surface geometry is missing required attributes");
-    return null;
-  }
-  
-  // 새로운 extrude된 메시를 위한 지오메트리 생성
-  const extrudeGeometry = new THREE.BufferGeometry();
-  
-  // 정점 복사 (기존 표면 + extrude된 표면)
-  const vertexCount = positions.count;
-  const vertices = new Float32Array(vertexCount * 2 * 3); // 각 정점은 x,y,z 좌표를 가짐 (기존 + 돌출 표면)
-  
-  // 기존 표면의 정점 복사
-  for (let i = 0; i < vertexCount; i++) {
-    const x = positions.getX(i);
-    const y = positions.getY(i);
-    const z = positions.getZ(i);
-    
-    // 기존 정점 복사
-    vertices[i * 3] = x;
-    vertices[i * 3 + 1] = y;
-    vertices[i * 3 + 2] = z;
-    
-    // 클릭 방향으로 돌출된 정점 생성
-    vertices[(i + vertexCount) * 3] = x + averageClickDirection.x * extrudeDistance;
-    vertices[(i + vertexCount) * 3 + 1] = y + averageClickDirection.y * extrudeDistance;
-    vertices[(i + vertexCount) * 3 + 2] = z + averageClickDirection.z * extrudeDistance;
-  }
-  
-  // 정점 속성 설정
-  extrudeGeometry.setAttribute('position', new THREE.BufferAttribute(vertices, 3));
-  
-  // 기존 표면의 인덱스 카운트
-  const indexCount = indices.count;
-  const indexArray = indices.array;
-  
-  // 새로운 인덱스 배열 (기존 표면 + 돌출된 표면 + 측면)
-  const newIndices = [];
-  
-  // 기존 표면의 인덱스 복사 (뒤집지 않음)
-  for (let i = 0; i < indexCount; i += 3) {
-    const a = indexArray[i];
-    const b = indexArray[i + 1];
-    const c = indexArray[i + 2];
-    
-    newIndices.push(a, b, c);
-  }
-  
-  // 돌출된 표면의 인덱스 (법선 방향이 반대로 가도록 정점 순서 반대로)
-  for (let i = 0; i < indexCount; i += 3) {
-    const a = indexArray[i] + vertexCount;
-    const b = indexArray[i + 1] + vertexCount;
-    const c = indexArray[i + 2] + vertexCount;
-    
-    newIndices.push(c, b, a); // 역순으로 정렬하여 법선이 바깥쪽을 향하게 함
-  }
-  
-  // 측면 인덱스 생성 (원래 표면의 외곽선)
-  // 삼각형 인덱스에서 에지 찾기
-  const edges = new Map(); // 에지 맵: "v1,v2" => [count, face]
-  
-  // 모든 에지 찾기
-  for (let i = 0; i < indexCount; i += 3) {
-    const a = indexArray[i];
-    const b = indexArray[i + 1];
-    const c = indexArray[i + 2];
-    
-    // 에지 추가 (정점 인덱스가 작은 것이 먼저 오도록)
-    const addEdge = (v1, v2) => {
-      const key = v1 < v2 ? `${v1},${v2}` : `${v2},${v1}`;
-      if (!edges.has(key)) {
-        edges.set(key, { count: 1, v1, v2 });
-      } else {
-        const edge = edges.get(key);
-        edge.count += 1;
-      }
-    };
-    
-    addEdge(a, b);
-    addEdge(b, c);
-    addEdge(c, a);
-  }
-  
-  // 외곽선 에지만 선택 (한 번만 사용된 에지)
-  const outlineEdges = [];
-  for (const edge of edges.values()) {
-    if (edge.count === 1) {
-      outlineEdges.push(edge);
-    }
-  }
-  
-  // 외곽선 에지를 따라 측면 삼각형 생성
-  for (const edge of outlineEdges) {
-    const { v1, v2 } = edge;
-    const v3 = v1 + vertexCount;
-    const v4 = v2 + vertexCount;
-    
-    // 사각형을 2개의 삼각형으로 분할
-    newIndices.push(v1, v2, v3);
-    newIndices.push(v2, v4, v3);
-  }
-  
-  // 인덱스 설정
-  extrudeGeometry.setIndex(newIndices);
-  
-  // 법선 계산
-  extrudeGeometry.computeVertexNormals();
-  
-  // 메시 생성
-  const extrudeMaterial = new THREE.MeshMatcapMaterial({
-    matcap: matcaps['Red Wax'],
-    side: THREE.DoubleSide,
-    flatShading: false
-  });
-  
-  const extrudeMesh = new THREE.Mesh(extrudeGeometry, extrudeMaterial);
-  
-  // 기존 표면 제거 및 새 메시 추가
-  scene.remove(closedArea);
-  scene.add(extrudeMesh);
-  
-  // 메시 참조 업데이트
-  closedArea = extrudeMesh;
-  
-  return extrudeMesh;
-}
+
 // 초기화 함수
 function init() {
   renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -911,6 +857,14 @@ function setupGUI() {
     }
   });
   
+  // Add thickness slider
+  gui.add(params, 'thickness', 0.001, 0.2).step(0.001).name('Surface Thickness').onChange(() => {
+    // Update surface if it exists
+    if (isDrawingClosed && closedArea) {
+      updateSurface();
+    }
+  });
+  
   // 곡선 품질 조절 옵션 추가
   gui.add(params, 'curveQuality', 5, 50).step(1).name('Curve Quality').onChange(() => {
     // 모든 곡선을 업데이트 (닫혀 있다면 표면도 업데이트)
@@ -918,12 +872,6 @@ function setupGUI() {
       updateAllCurves();
     }
   });
-  
-  // Extrude 관련 폴더 추가
-  const extrudeFolder = gui.addFolder('Extrude Options');
-  extrudeFolder.add(params, 'extrudeDistance', 0.01, 0.5).step(0.01).name('Extrude Distance');
-  extrudeFolder.add(params, 'performExtrude').name('Perform Extrude');
-  extrudeFolder.open();
   
   gui.add(params, 'clearPoints').name('Clear All');
 }
