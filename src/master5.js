@@ -645,27 +645,14 @@ function isPointInPolygon(point, polygon) {
   
   return inside;
 }
-
-
+// 생성된 곡면을 기준으로 extrude 처리하는 함수
 function extrudeSurface(extrudeDistance) {
   if (!closedArea) {
     console.warn("Cannot extrude: no surface available");
     return null;
   }
   
-  // 1. Get the original geometry from the surface
-  const originalGeometry = closedArea.geometry;
-  const positions = originalGeometry.getAttribute('position');
-  const normals = originalGeometry.getAttribute('normal');
-  const indices = originalGeometry.getIndex();
-  
-  if (!positions || !normals) {
-    console.error("Surface geometry is missing required attributes");
-    return null;
-  }
-  
-  // 2. Calculate the extrusion direction based on the average normal
-  // and clicked direction for better results
+  // 클릭 방향의 평균을 계산 (사용자 시점에서 모델 방향)
   const averageClickDirection = new THREE.Vector3();
   clickPoints.forEach(pointData => {
     if (pointData.clickDirection) {
@@ -673,9 +660,13 @@ function extrudeSurface(extrudeDistance) {
     }
   });
   
-  // If no click direction, use the average normal of the surface
+  // 클릭 방향이 없으면 원본 법선 방향 사용
   if (averageClickDirection.length() < 0.001) {
-    for (let i = 0; i < normals.count; i++) {
+    console.warn("No click direction found, falling back to normal direction");
+    // 기존 표면의 법선 방향 사용
+    const positions = closedArea.geometry.getAttribute('position');
+    const normals = closedArea.geometry.getAttribute('normal');
+    for (let i = 0; i < positions.count; i++) {
       averageClickDirection.add(
         new THREE.Vector3(
           normals.getX(i),
@@ -686,153 +677,128 @@ function extrudeSurface(extrudeDistance) {
     }
   }
   
-  // Normalize and negate to point inward
-  averageClickDirection.normalize().negate();
+  // 정규화
+  averageClickDirection.normalize();
   
-  // 3. Create a new BufferGeometry for the extruded mesh
-  const extrudeGeometry = new THREE.BufferGeometry();
+  // 클릭 방향을 거꾸로하여 모델 안쪽으로 향하게 함 (사용자가 모델을 보는 방향에서 반대 방향)
+  averageClickDirection.negate();
   
-  // 4. Create the extruded vertices and normals with smoothing
-  const vertexCount = positions.count;
-  const newPositions = new Float32Array(vertexCount * 2 * 3);
-  const newNormals = new Float32Array(vertexCount * 2 * 3);
+  console.log("Extrude direction:", averageClickDirection);
   
-  // Store vertex normals for better interpolation
-  const vertexNormals = [];
-  for (let i = 0; i < vertexCount; i++) {
-    vertexNormals.push(new THREE.Vector3(
-      normals.getX(i),
-      normals.getY(i),
-      normals.getZ(i)
-    ));
+  // 기존 표면 지오메트리에서 정점과 법선 가져오기
+  const positions = closedArea.geometry.getAttribute('position');
+  const normals = closedArea.geometry.getAttribute('normal');
+  const indices = closedArea.geometry.getIndex();
+  
+  if (!positions || !normals || !indices) {
+    console.error("Surface geometry is missing required attributes");
+    return null;
   }
   
-  // Calculate smoothed normals for better appearance
-  const smoothedNormals = calculateSmoothedNormals(originalGeometry, vertexNormals);
+  // 새로운 extrude된 메시를 위한 지오메트리 생성
+  const extrudeGeometry = new THREE.BufferGeometry();
   
-  // Copy the front and back face vertices
+  // 정점 복사 (기존 표면 + extrude된 표면)
+  const vertexCount = positions.count;
+  const vertices = new Float32Array(vertexCount * 2 * 3); // 각 정점은 x,y,z 좌표를 가짐 (기존 + 돌출 표면)
+  
+  // 기존 표면의 정점 복사
   for (let i = 0; i < vertexCount; i++) {
     const x = positions.getX(i);
     const y = positions.getY(i);
     const z = positions.getZ(i);
     
-    // Original surface vertex
-    newPositions[i * 3] = x;
-    newPositions[i * 3 + 1] = y;
-    newPositions[i * 3 + 2] = z;
+    // 기존 정점 복사
+    vertices[i * 3] = x;
+    vertices[i * 3 + 1] = y;
+    vertices[i * 3 + 2] = z;
     
-    // Use smoothed normals for better appearance
-    const smoothNormal = smoothedNormals[i].clone();
-    newNormals[i * 3] = smoothNormal.x;
-    newNormals[i * 3 + 1] = smoothNormal.y;
-    newNormals[i * 3 + 2] = smoothNormal.z;
-    
-    // Extruded vertex - using smoothed normals for direction
-    // for more organic extrusion that follows the surface contours
-    const extrudeDir = smoothNormal.clone().multiplyScalar(0.3).add(averageClickDirection.clone().multiplyScalar(0.7));
-    extrudeDir.normalize();
-    
-    const extrudedX = x + extrudeDir.x * extrudeDistance;
-    const extrudedY = y + extrudeDir.y * extrudeDistance;
-    const extrudedZ = z + extrudeDir.z * extrudeDistance;
-    
-    // Back face vertex (extruded)
-    newPositions[(i + vertexCount) * 3] = extrudedX;
-    newPositions[(i + vertexCount) * 3 + 1] = extrudedY;
-    newPositions[(i + vertexCount) * 3 + 2] = extrudedZ;
-    
-    // Back face normal (inverted)
-    newNormals[(i + vertexCount) * 3] = -smoothNormal.x;
-    newNormals[(i + vertexCount) * 3 + 1] = -smoothNormal.y;
-    newNormals[(i + vertexCount) * 3 + 2] = -smoothNormal.z;
+    // 클릭 방향으로 돌출된 정점 생성
+    vertices[(i + vertexCount) * 3] = x + averageClickDirection.x * extrudeDistance;
+    vertices[(i + vertexCount) * 3 + 1] = y + averageClickDirection.y * extrudeDistance;
+    vertices[(i + vertexCount) * 3 + 2] = z + averageClickDirection.z * extrudeDistance;
   }
   
-  // 5. Create indices for front, back, and side faces
+  // 정점 속성 설정
+  extrudeGeometry.setAttribute('position', new THREE.BufferAttribute(vertices, 3));
+  
+  // 기존 표면의 인덱스 카운트
+  const indexCount = indices.count;
+  const indexArray = indices.array;
+  
+  // 새로운 인덱스 배열 (기존 표면 + 돌출된 표면 + 측면)
   const newIndices = [];
   
-  // If we have original indices, use them for front/back faces
-  if (indices && indices.count > 0) {
-    // Front face (original orientation)
-    for (let i = 0; i < indices.count; i += 3) {
-      const a = indices.getX(i);
-      const b = indices.getX(i + 1);
-      const c = indices.getX(i + 2);
-      
-      newIndices.push(a, b, c);
-    }
+  // 기존 표면의 인덱스 복사 (뒤집지 않음)
+  for (let i = 0; i < indexCount; i += 3) {
+    const a = indexArray[i];
+    const b = indexArray[i + 1];
+    const c = indexArray[i + 2];
     
-    // Back face (reversed orientation)
-    for (let i = 0; i < indices.count; i += 3) {
-      const a = indices.getX(i) + vertexCount;
-      const b = indices.getX(i + 1) + vertexCount;
-      const c = indices.getX(i + 2) + vertexCount;
-      
-      // Reverse order to flip normal
-      newIndices.push(c, b, a);
-    }
-  } else {
-    // No indices - assume each 3 vertices is a triangle
-    for (let i = 0; i < vertexCount; i += 3) {
-      // Front face
-      newIndices.push(i, i + 1, i + 2);
-      
-      // Back face (reversed)
-      newIndices.push(i + 2 + vertexCount, i + 1 + vertexCount, i + vertexCount);
+    newIndices.push(a, b, c);
+  }
+  
+  // 돌출된 표면의 인덱스 (법선 방향이 반대로 가도록 정점 순서 반대로)
+  for (let i = 0; i < indexCount; i += 3) {
+    const a = indexArray[i] + vertexCount;
+    const b = indexArray[i + 1] + vertexCount;
+    const c = indexArray[i + 2] + vertexCount;
+    
+    newIndices.push(c, b, a); // 역순으로 정렬하여 법선이 바깥쪽을 향하게 함
+  }
+  
+  // 측면 인덱스 생성 (원래 표면의 외곽선)
+  // 삼각형 인덱스에서 에지 찾기
+  const edges = new Map(); // 에지 맵: "v1,v2" => [count, face]
+  
+  // 모든 에지 찾기
+  for (let i = 0; i < indexCount; i += 3) {
+    const a = indexArray[i];
+    const b = indexArray[i + 1];
+    const c = indexArray[i + 2];
+    
+    // 에지 추가 (정점 인덱스가 작은 것이 먼저 오도록)
+    const addEdge = (v1, v2) => {
+      const key = v1 < v2 ? `${v1},${v2}` : `${v2},${v1}`;
+      if (!edges.has(key)) {
+        edges.set(key, { count: 1, v1, v2 });
+      } else {
+        const edge = edges.get(key);
+        edge.count += 1;
+      }
+    };
+    
+    addEdge(a, b);
+    addEdge(b, c);
+    addEdge(c, a);
+  }
+  
+  // 외곽선 에지만 선택 (한 번만 사용된 에지)
+  const outlineEdges = [];
+  for (const edge of edges.values()) {
+    if (edge.count === 1) {
+      outlineEdges.push(edge);
     }
   }
   
-  // 6. Find and process the boundary edges for side faces
-  const edgeMap = new Map(); // Map to track edges
-  
-  // Find all edges from triangles
-  if (indices && indices.count > 0) {
-    for (let i = 0; i < indices.count; i += 3) {
-      const a = indices.getX(i);
-      const b = indices.getX(i + 1);
-      const c = indices.getX(i + 2);
-      
-      // Process each edge of the triangle
-      processEdge(edgeMap, a, b);
-      processEdge(edgeMap, b, c);
-      processEdge(edgeMap, c, a);
-    }
-  } else {
-    // No indices - assume each 3 vertices is a triangle
-    for (let i = 0; i < vertexCount; i += 3) {
-      processEdge(edgeMap, i, i + 1);
-      processEdge(edgeMap, i + 1, i + 2);
-      processEdge(edgeMap, i + 2, i);
-    }
-  }
-  
-  // Find boundary edges (used exactly once)
-  const boundaryEdges = [];
-  for (const [edge, count] of edgeMap.entries()) {
-    if (count === 1) {
-      const [v1, v2] = edge.split(',').map(Number);
-      boundaryEdges.push([v1, v2]);
-    }
-  }
-  
-  // 7. Create side faces using boundary edges
-  boundaryEdges.forEach(([v1, v2]) => {
+  // 외곽선 에지를 따라 측면 삼각형 생성
+  for (const edge of outlineEdges) {
+    const { v1, v2 } = edge;
     const v3 = v1 + vertexCount;
     const v4 = v2 + vertexCount;
     
-    // Create two triangles for the quad (side face)
+    // 사각형을 2개의 삼각형으로 분할
     newIndices.push(v1, v2, v3);
     newIndices.push(v2, v4, v3);
-  });
+  }
   
-  // 8. Set the attributes
-  extrudeGeometry.setAttribute('position', new THREE.BufferAttribute(newPositions, 3));
-  extrudeGeometry.setAttribute('normal', new THREE.BufferAttribute(newNormals, 3));
+  // 인덱스 설정
   extrudeGeometry.setIndex(newIndices);
   
-  // Apply additional smoothing to improve appearance
+  // 법선 계산
   extrudeGeometry.computeVertexNormals();
   
-  // 9. Create and add the mesh
+  // 메시 생성
   const extrudeMaterial = new THREE.MeshMatcapMaterial({
     matcap: matcaps['Red Wax'],
     side: THREE.DoubleSide,
@@ -841,72 +807,15 @@ function extrudeSurface(extrudeDistance) {
   
   const extrudeMesh = new THREE.Mesh(extrudeGeometry, extrudeMaterial);
   
-  // Replace existing surface mesh
+  // 기존 표면 제거 및 새 메시 추가
   scene.remove(closedArea);
   scene.add(extrudeMesh);
+  
+  // 메시 참조 업데이트
   closedArea = extrudeMesh;
   
   return extrudeMesh;
 }
-
-// Helper function to process edge during extrusion
-function processEdge(edgeMap, v1, v2) {
-  // Create canonical edge representation (smaller index first)
-  const edge = v1 < v2 ? `${v1},${v2}` : `${v2},${v1}`;
-  
-  // Count edge occurrences
-  edgeMap.set(edge, (edgeMap.get(edge) || 0) + 1);
-}
-
-// Calculate smoothed normals for better appearance
-function calculateSmoothedNormals(geometry, originalNormals) {
-  const positions = geometry.getAttribute('position');
-  const vertexCount = positions.count;
-  const smoothedNormals = Array(vertexCount).fill().map(() => new THREE.Vector3());
-  
-  // Find close vertices for normal smoothing (using position proximity)
-  const proximityThreshold = 0.001; // Threshold for considering vertices as neighbors
-  
-  // For each vertex
-  for (let i = 0; i < vertexCount; i++) {
-    const posI = new THREE.Vector3(
-      positions.getX(i),
-      positions.getY(i),
-      positions.getZ(i)
-    );
-    
-    // Start with the original normal
-    smoothedNormals[i].copy(originalNormals[i]);
-    
-    // Accumulate normals from nearby vertices
-    let normalCount = 1;
-    
-    for (let j = 0; j < vertexCount; j++) {
-      if (i === j) continue;
-      
-      const posJ = new THREE.Vector3(
-        positions.getX(j),
-        positions.getY(j),
-        positions.getZ(j)
-      );
-      
-      // If vertices are close, combine their normals
-      if (posI.distanceTo(posJ) < proximityThreshold) {
-        smoothedNormals[i].add(originalNormals[j]);
-        normalCount++;
-      }
-    }
-    
-    // Average the accumulated normals
-    if (normalCount > 1) {
-      smoothedNormals[i].divideScalar(normalCount);
-      smoothedNormals[i].normalize();
-    }
-  }
-  
-  return smoothedNormals;
-}
-
 // 초기화 함수
 function init() {
   renderer = new THREE.WebGLRenderer({ antialias: true });
