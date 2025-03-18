@@ -20,7 +20,7 @@ const params = {
   blockout: false,
   showOriginal: false,
   showSurface: true,
-  thickness: 0.05, // Adding thickness parameter with default value
+  thickness: 0.001, // Adding thickness parameter with default value
   curveQuality: 20, // 곡선 품질 파라미터
   clearPoints: function() {
     clearAllPointsAndCurves();
