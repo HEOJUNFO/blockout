@@ -20,7 +20,7 @@ const params = {
   blockout: false,
   showOriginal: false,
   showSurface: true,
-  thickness: 0.001, // Adding thickness parameter with default value
+  thickness: 0.01, // Adding thickness parameter with default value
   curveQuality: 20, // 곡선 품질 파라미터
   clearPoints: function() {
     clearAllPointsAndCurves();
@@ -437,32 +437,15 @@ function createSurfaceFromClosedCurves() {
     
     // Get normalized distance from border (0 at border, 1 at "center")
     const normalizedDistance = distancesFromBorder[vertexIndex];
-    
-    // Apply logarithmic scaling for dome effect as requested
-    // Using logarithmic function: g(x) = log_a(x+epsilon) where a > 1
-    // Normalize to [0,1] range with proper scaling
-    
-    // Add small epsilon to avoid log(0) which is undefined
-    const epsilon = 0.001;
-    // Base of the logarithm (a > 1) - higher values make curve steeper near the edge
-    const logBase = 10;
-    
-    // Compute the logarithmic scale factor
-    // Map x from [0,1] to [0,1] using log function
-    let logValue = Math.log(normalizedDistance + epsilon) / Math.log(logBase);
-    
-    // Normalize the log value to [0,1] range
-    // log_a(1+epsilon) is the max value, log_a(0+epsilon) is the min value
-    const minLogValue = Math.log(epsilon) / Math.log(logBase);
-    const maxLogValue = Math.log(1 + epsilon) / Math.log(logBase);
-    const normalizedLogValue = (logValue - minLogValue) / (maxLogValue - minLogValue);
-    
-    // Use the normalized log value as the scale factor
-    const scaleFactor = normalizedLogValue;
+     
+    // Calculate the scale factor using a sigmoid-like function
+    const sigmoidValue = normalizedDistance / (0.1 + normalizedDistance);
+    // Normalize to [0,1]
+    const scaleFactor = sigmoidValue / (1 / (0.1 + 1));
     
     // Apply the variable extrusion
     const extrusionAmount = params.thickness * scaleFactor;
-    
+  
     // Offset along normal by variable thickness amount
     backPositions[i] = frontPositions[i] + nx * extrusionAmount;
     backPositions[i + 1] = frontPositions[i + 1] + ny * extrusionAmount;
@@ -1117,14 +1100,6 @@ function setupGUI() {
     // Update surface if it exists
     if (isDrawingClosed && closedArea) {
       updateSurface();
-    }
-  });
-  
-  // 곡선 품질 조절 옵션 추가
-  gui.add(params, 'curveQuality', 5, 50).step(1).name('Curve Quality').onChange(() => {
-    // 모든 곡선을 업데이트 (닫혀 있다면 표면도 업데이트)
-    if (clickPoints.length >= 2) {
-      updateAllCurves();
     }
   });
   
