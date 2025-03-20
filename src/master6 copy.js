@@ -241,7 +241,7 @@ function createSurfaceFromClosedCurves() {
     boundary2D.push(new THREE.Vector2(x, y));
   });
   
-  // 5. High-density triangulation for smoother surface
+  // 5. Improved triangulation with higher density sampling
   // First clean up the boundary to remove very close points
   const cleanBoundary2D = [];
   const minPointDistance = 0.0001; // Minimum distance between points
@@ -258,9 +258,19 @@ function createSurfaceFromClosedCurves() {
     }
   }
   
-  // Always use the dense grid triangulation for smoother surfaces
-  // Skip trying the standard triangulation which sometimes produces artifacts
-  let triangles = createDenseTriangleGrid(cleanBoundary2D, 80); // Increased density from 40 to 80
+  // Use a more robust triangulation method
+  let triangles = [];
+  try {
+    triangles = triangulate2DPolygon(cleanBoundary2D);
+    
+    // Verify triangulation result - must have at least one triangle
+    if (triangles.length < 3) {
+      throw new Error("Triangulation failed to generate triangles");
+    }
+  } catch (error) {
+    console.warn("Standard triangulation failed, using dense grid:", error);
+    triangles = createDenseTriangleGrid(cleanBoundary2D);
+  }
   
   // 6. Create 3D vertices for the triangulation - for the front face with improved raycast
   const frontPositions = new Float32Array(triangles.length * 3);
@@ -623,29 +633,11 @@ function createSurfaceFromClosedCurves() {
   // Smooth normals to reduce artifacts
   geometry.computeVertexNormals();
   
-  // Create a smoother, higher-resolution surface using subdivision
-  // Use BufferGeometryUtils to subdivide the mesh for smoother appearance
-  let subdividedGeometry = geometry;
-  if (geometry.attributes.position.count < 10000) { // Only subdivide if not already high-resolution
-    try {
-      // Apply subdivision modifier to create smoother surface
-      const modifier = new THREE.SubdivisionModifier(1); // 1 level of subdivision
-      subdividedGeometry = BufferGeometryUtils.toNonIndexed(geometry);
-      subdividedGeometry = modifier.modify(subdividedGeometry);
-    } catch (e) {
-      console.warn("Subdivision failed, using original geometry:", e);
-      subdividedGeometry = geometry;
-    }
-  }
-  
-  // Compute vertex normals again after subdivision for smoother shading
-  subdividedGeometry.computeVertexNormals();
-  
-  // 재질 생성 - 원본 모델과 유사한 재질 설정
+  // 재질 생성 (백페이스 컬링 비활성화로 균열 현상 감소)
   const surfaceMaterial = new THREE.MeshMatcapMaterial({
     matcap: matcaps['Red Wax'],
-    side: THREE.DoubleSide,
-    flatShading: false,
+    side: THREE.DoubleSide, // Change from FrontSide to DoubleSide to hide potential cracks
+    flatShading: false
   });
   
   // 메시 생성
@@ -802,16 +794,16 @@ function isPointInTriangle(p, a, b, c) {
   return Math.abs(areaABC - (areaPBC + areaPAC + areaPAB)) < epsilon;
 }
 
-// Create a dense grid of triangles with adjustable resolution
-function createDenseTriangleGrid(boundaryPoints, gridSize = 40) {
+// Fallback method: create a dense grid of triangles
+function createDenseTriangleGrid(boundaryPoints) {
   // Find the bounding box
   const minX = Math.min(...boundaryPoints.map(p => p.x));
   const maxX = Math.max(...boundaryPoints.map(p => p.x));
   const minY = Math.min(...boundaryPoints.map(p => p.y));
   const maxY = Math.max(...boundaryPoints.map(p => p.y));
   
-  // Create a dense grid with specified resolution
-  // Higher gridSize means smoother surface
+  // Create a dense grid
+  const gridSize = 40; // Higher density
   const stepX = (maxX - minX) / gridSize;
   const stepY = (maxY - minY) / gridSize;
   
