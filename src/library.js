@@ -49,32 +49,30 @@ function centerAndScaleGeometry( geometry ) {
   }
 }
 
-function fitCameraToObject( camera, object, offset = 2 ) {
-
+function fitCameraToObject(camera, object, offset = 2) {
   // object의 World Matrix가 최신 상태임을 보장
-  object.updateWorldMatrix( true, false );
+  object.updateWorldMatrix(true, false);
 
   // 바운딩 박스를 구함
-  const box = new THREE.Box3().setFromObject( object );
-  const center = box.getCenter( new THREE.Vector3() );
-  const size = box.getSize( new THREE.Vector3() );
+  const box = new THREE.Box3().setFromObject(object);
+  const center = box.getCenter(new THREE.Vector3());
+  const size = box.getSize(new THREE.Vector3());
 
   // 최대 치수를 구함
-  const maxDim = Math.max( size.x, size.y, size.z );
+  const maxDim = Math.max(size.x, size.y, size.z);
 
   // 카메라 fov는 degree이므로 라디안으로 변환
-  const fov = camera.fov * ( Math.PI / 180 );
-  // 모델을 모두 담기 위한 Z 거리 (단순 근사)
-  let cameraZ = maxDim / 2 / Math.tan( fov / 2 );
-  cameraZ *= offset; // 여유 공간
-
-  // 모델 중심 좌표와 cameraZ를 이용해 카메라 위치 지정
-  camera.position.set( center.x, center.y, center.z + cameraZ );
-  camera.lookAt( center );
+  const fov = camera.fov * (Math.PI / 180);
+  // 모델을 모두 담기 위한 거리 (단순 근사)
+  let cameraDistance = maxDim / 2 / Math.tan(fov / 2) * offset;
+  camera.position.set(center.x, center.y, center.z - cameraDistance);
+    
+  // 모델 중심을 바라보게 설정
+  camera.lookAt(center);
 
   // OrbitControls가 있다면, target도 모델 중심에 맞춤
-  if ( controls ) {
-    controls.target.copy( center );
+  if (controls) {
+    controls.target.copy(center);
     controls.update();
   }
 }
