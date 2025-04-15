@@ -13,6 +13,7 @@
   "description": "",
   "dependencies": {
     "delaunator": "^5.0.1",
+    "jszip": "^3.10.1",
     "three": "^0.172.0",
     "three-bvh-csg": "^0.0.16",
     "three-csg-ts": "^3.2.0",
