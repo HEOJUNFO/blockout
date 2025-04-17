@@ -28,6 +28,10 @@ let targetMesh = null;
 let material = false;
 let placedTeeth = [];
 
+// Raycast for tooth selection
+const toothRaycaster = new THREE.Raycaster();
+const mouse = new THREE.Vector2();
+
 // Sculpt parameters
 const params = {
   matcap: 'Clay',
@@ -89,6 +93,53 @@ export function setTargetMeshGeometry(geometry) {
   targetMesh.frustumCulled = false;
   scene.add(targetMesh);
   fitCameraToObject(camera, targetMesh);
+}
+
+/**
+ * Handle tooth selection click
+ * Implements the ability to click on a placed tooth to reactivate transform controls
+ */
+function handleToothSelection(event) {
+  // Skip if we're in tooth placement mode
+  if (window.isPlacementActive && window.isPlacementActive()) return;
+
+  // Get mouse position in normalized device coordinates
+  const rect = renderer.domElement.getBoundingClientRect();
+  mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+  mouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+  
+  // Set raycaster from camera
+  toothRaycaster.setFromCamera(mouse, camera);
+  
+  // Check for intersections with placed teeth
+  const intersects = toothRaycaster.intersectObjects(placedTeeth);
+  
+  // If we clicked on a tooth
+  if (intersects.length > 0) {
+    const clickedTooth = intersects[0].object;
+    
+    // If transform controls are already attached to this tooth, do nothing
+    if (transformControls.object === clickedTooth) return;
+    
+    // If transform controls are attached to another tooth, detach and remove UI
+    if (transformControls.object) {
+      const existingUI = document.getElementById('transform-ui');
+      if (existingUI) existingUI.remove();
+      transformControls.detach();
+    }
+    
+    // Attach transform controls to clicked tooth
+    transformControls.attach(clickedTooth);
+    
+    // Create the UI for transform controls
+    createTransformUI();
+  }
+  // If we didn't click on a tooth but transform controls are attached, detach them
+  else if (transformControls.object) {
+    const existingUI = document.getElementById('transform-ui');
+    if (existingUI) existingUI.remove();
+    transformControls.detach();
+  }
 }
 
 /**
@@ -404,6 +455,9 @@ function init() {
   
   // Disable standard scale mode
   disableScaleMode();
+
+  // Add click event listener for tooth selection
+  renderer.domElement.addEventListener('click', handleToothSelection);
 
   // matcaps setup
   matcaps['Clay']        = new THREE.TextureLoader().load('textures/B67F6B_4B2E2A_6C3A34_F3DBC6-256px.png');
