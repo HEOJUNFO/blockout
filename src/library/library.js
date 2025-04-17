@@ -424,7 +424,7 @@ function render() {
   requestAnimationFrame(render);
 
   // Update OrbitControls (if not in placement mode)
-  if (controls && !isPlacementActive()) {
+  if (controls ) {
     controls.update();
   }
 

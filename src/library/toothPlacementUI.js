@@ -126,11 +126,6 @@ export function startToothPlacement(toothId, modelPath) {
   // Highlight selected tooth in chart
   highlightSelectedTooth(toothId);
   
-  // Disable orbit controls temporarily
-  if (controls) {
-    controls.enabled = false;
-  }
-  
   // Show placement UI
   const placementUI = document.getElementById('placement-ui');
   const placementInstructions = document.getElementById('placement-instructions');
