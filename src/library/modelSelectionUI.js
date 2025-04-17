@@ -1,5 +1,6 @@
 // Model Selection UI module
 import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js';
+import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import * as THREE from 'three';
 import { highlightSelectedTooth } from './dentalChartUI.js';
 import { startToothPlacement } from './toothPlacementUI.js';
@@ -7,6 +8,14 @@ import { startToothPlacement } from './toothPlacementUI.js';
 // Module variables
 let stlLoader;
 let setTargetMeshGeometryFn;
+
+// 3D 프리뷰 관련 변수
+let previewScene, previewCamera, previewRenderer, previewControls;
+let previewContainer, previewMesh;
+
+// Matcap 텍스처 관리
+const matcaps = {};
+matcaps['Clay'] = new THREE.TextureLoader().load('textures/B67F6B_4B2E2A_6C3A34_F3DBC6-256px.png');
 
 /**
  * Initialize model selection functionality
@@ -16,6 +25,11 @@ let setTargetMeshGeometryFn;
 export function initModelSelection(loader, setGeometryFn) {
   stlLoader = loader;
   setTargetMeshGeometryFn = setGeometryFn;
+  
+  // Matcap 텍스처 인코딩 설정
+  for (const key in matcaps) {
+    matcaps[key].encoding = THREE.sRGBEncoding;
+  }
   
   // Add styles for model selection UI
   const styleElement = document.createElement('style');
@@ -29,8 +43,8 @@ export function initModelSelection(loader, setGeometryFn) {
       box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
       padding: 15px;
       z-index: 1100;
-      width: 300px;
-      max-height: 70vh;
+      width: 320px;
+      max-height: 80vh;
       overflow-y: auto;
     }
     .ui-header {
@@ -106,7 +120,54 @@ export function initModelSelection(loader, setGeometryFn) {
       font-size: 12px;
       color: #666;
     }
-    /* ui-footer 클래스 제거 - ui-actions로 대체함 */
+    
+    /* 프리뷰 관련 스타일 추가 */
+    #model-preview-container {
+      width: 100%;
+      height: 220px;
+      background-color: #f8f8f8;
+      border-radius: 8px;
+      overflow: hidden;
+      margin-bottom: 15px;
+      position: relative;
+      box-shadow: inset 0 0 5px rgba(0, 0, 0, 0.1);
+    }
+    
+    .preview-loading {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background-color: rgba(255, 255, 255, 0.7);
+      z-index: 1;
+    }
+    
+    .preview-loading-spinner {
+      width: 30px;
+      height: 30px;
+      border: 3px solid rgba(33, 150, 243, 0.3);
+      border-radius: 50%;
+      border-top: 3px solid #2196F3;
+      animation: spin 1s linear infinite;
+    }
+    
+    #preview-controls-hint {
+      position: absolute;
+      bottom: 10px;
+      left: 10px;
+      background-color: rgba(0, 0, 0, 0.6);
+      color: white;
+      font-size: 11px;
+      padding: 4px 8px;
+      border-radius: 4px;
+      pointer-events: none;
+      opacity: 0.8;
+    }
+    
     #place-model-btn {
       background-color: #4caf50;
       color: white;
@@ -159,6 +220,160 @@ export function initModelSelection(loader, setGeometryFn) {
     }
   `;
   document.head.appendChild(styleElement);
+}
+
+/**
+ * 프리뷰 화면 초기화
+ * @param {HTMLElement} container - 프리뷰를 표시할 컨테이너
+ */
+function initPreviewScene(container) {
+  // 씬 생성
+  previewScene = new THREE.Scene();
+  previewScene.background = new THREE.Color(0xf8f8f8);
+  
+  // 카메라 생성
+  previewCamera = new THREE.PerspectiveCamera(60, container.clientWidth / container.clientHeight, 0.1, 1000);
+  previewCamera.position.set(0, 5, 10);
+  
+  // 렌더러 생성
+  previewRenderer = new THREE.WebGLRenderer({ antialias: true });
+  previewRenderer.setSize(container.clientWidth, container.clientHeight);
+  container.appendChild(previewRenderer.domElement);
+  
+  // 컨트롤 추가
+  previewControls = new OrbitControls(previewCamera, previewRenderer.domElement);
+  previewControls.enableDamping = true;
+  previewControls.dampingFactor = 0.25;
+  
+  // 조명 추가
+  const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
+  previewScene.add(ambientLight);
+  
+  const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+  directionalLight.position.set(1, 1, 1);
+  previewScene.add(directionalLight);
+  
+  // 그리드 헬퍼 제거함
+  
+  // 컨트롤 힌트 추가
+  const hintElement = document.createElement('div');
+  hintElement.id = 'preview-controls-hint';
+  hintElement.textContent = '마우스 드래그: 회전 / 휠: 확대/축소';
+  container.appendChild(hintElement);
+  
+  // 애니메이션 루프 시작
+  animatePreview();
+}
+
+/**
+ * 프리뷰 애니메이션 루프
+ */
+function animatePreview() {
+  if (!previewRenderer) return;
+  
+  requestAnimationFrame(animatePreview);
+  previewControls.update();
+  previewRenderer.render(previewScene, previewCamera);
+}
+
+/**
+ * 모델 프리뷰 로드
+ * @param {string} modelPath - 모델 파일 경로
+ */
+function loadModelPreview(modelPath) {
+  // 로딩 표시
+  if (previewContainer) {
+    const loadingElement = document.createElement('div');
+    loadingElement.className = 'preview-loading';
+    loadingElement.innerHTML = '<div class="preview-loading-spinner"></div>';
+    loadingElement.id = 'preview-loading';
+    previewContainer.appendChild(loadingElement);
+  }
+  
+  // 기존 프리뷰 메시 제거
+  if (previewMesh && previewScene) {
+    previewScene.remove(previewMesh);
+    previewMesh = null;
+  }
+  
+  // 모델 로드
+  const loader = new STLLoader();
+  loader.load(
+    modelPath,
+    (geometry) => {
+      // 재질 생성
+      const material = new THREE.MeshMatcapMaterial({
+        flatShading: false,
+        side: THREE.DoubleSide,
+        matcap: matcaps['Clay']
+      });
+      for (const key in matcaps) matcaps[key].encoding = THREE.sRGBEncoding;
+      
+      // 메시 생성
+      previewMesh = new THREE.Mesh(geometry, material);
+      
+      // 메시 중앙 정렬
+      geometry.computeBoundingBox();
+      const center = new THREE.Vector3();
+      geometry.boundingBox.getCenter(center);
+      geometry.translate(-center.x, -center.y, -center.z);
+      
+      // 씬에 추가
+      previewScene.add(previewMesh);
+      
+      // 로딩 표시 제거
+      const loadingElement = document.getElementById('preview-loading');
+      if (loadingElement) {
+        loadingElement.remove();
+      }
+      
+      // 카메라 및 컨트롤 초기화 (모델 중심으로)
+      const boundingBox = new THREE.Box3().setFromObject(previewMesh);
+      const size = boundingBox.getSize(new THREE.Vector3());
+      const maxDim = Math.max(size.x, size.y, size.z);
+      const fov = previewCamera.fov * (Math.PI / 180);
+      const cameraDistance = maxDim / (2 * Math.tan(fov / 2));
+      
+      previewCamera.position.set(0, cameraDistance * 0.6, cameraDistance);
+      previewControls.target.set(0, 0, 0);
+      previewControls.update();
+    },
+    // 로드 진행 상황
+    (xhr) => {
+      console.log((xhr.loaded / xhr.total * 100) + '% 로드됨');
+    },
+    // 오류 처리
+    (error) => {
+      console.error('프리뷰 모델 로드 오류:', error);
+      
+      // 로딩 표시 제거
+      const loadingElement = document.getElementById('preview-loading');
+      if (loadingElement) {
+        loadingElement.remove();
+      }
+    }
+  );
+}
+
+/**
+ * 프리뷰 리소스 정리
+ */
+function cleanupPreview() {
+  if (previewRenderer) {
+    previewRenderer.dispose();
+    previewRenderer.domElement.remove();
+    previewRenderer = null;
+  }
+  
+  if (previewControls) {
+    previewControls.dispose();
+    previewControls = null;
+  }
+  
+  previewScene = null;
+  previewCamera = null;
+  previewMesh = null;
+  previewContainer = null;
 }
 
 /**
@@ -311,6 +526,10 @@ function showModelSelectionUI(toothId, availableModels) {
     <div class="ui-header">
       <h3>${toothId}번 치아 모델 선택</h3>
     </div>
+    
+    <!-- 3D 프리뷰 컨테이너 추가 -->
+    <div id="model-preview-container"></div>
+    
     <div class="ui-actions">
       <button id="place-model-btn">위치 지정</button>
       <button id="load-model-btn">바로 로드</button>
@@ -323,6 +542,10 @@ function showModelSelectionUI(toothId, availableModels) {
   
   document.body.appendChild(selectionUI);
   
+  // 프리뷰 컨테이너 초기화
+  previewContainer = document.getElementById('model-preview-container');
+  initPreviewScene(previewContainer);
+  
   // Model item click event
   document.querySelectorAll('.model-item').forEach(item => {
     item.addEventListener('click', () => {
@@ -333,6 +556,10 @@ function showModelSelectionUI(toothId, availableModels) {
       
       // Highlight new selection
       item.classList.add('selected');
+      
+      // 선택된 모델 프리뷰 로드
+      const modelPath = item.getAttribute('data-path');
+      loadModelPreview(modelPath);
     });
   });
   
@@ -342,6 +569,10 @@ function showModelSelectionUI(toothId, availableModels) {
     if (selectedItem) {
       const modelPath = selectedItem.getAttribute('data-path');
       selectionUI.remove();
+      
+      // 프리뷰 리소스 정리
+      cleanupPreview();
+      
       startToothPlacement(toothId, modelPath);
     } else {
       alert('모델을 선택해주세요.');
@@ -354,6 +585,10 @@ function showModelSelectionUI(toothId, availableModels) {
     if (selectedItem) {
       const modelPath = selectedItem.getAttribute('data-path');
       selectionUI.remove();
+      
+      // 프리뷰 리소스 정리
+      cleanupPreview();
+      
       loadSTLModel(modelPath);
     } else {
       alert('모델을 선택해주세요.');
@@ -363,11 +598,17 @@ function showModelSelectionUI(toothId, availableModels) {
   // Cancel button event
   document.getElementById('cancel-model-btn').addEventListener('click', () => {
     selectionUI.remove();
+    
+    // 프리뷰 리소스 정리
+    cleanupPreview();
   });
   
-  // Automatically select first model
+  // 자동으로 첫 번째 모델 선택 및 프리뷰 표시
   if (availableModels.length > 0) {
-    document.querySelector('.model-item').classList.add('selected');
+    const firstItem = document.querySelector('.model-item');
+    firstItem.classList.add('selected');
+    const modelPath = firstItem.getAttribute('data-path');
+    loadModelPreview(modelPath);
   }
 }
 
