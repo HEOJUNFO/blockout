@@ -153,6 +153,40 @@ function onMouseClick(event) {
 
   raycaster.setFromCamera(mouse, camera);
 
+  // Check if click is on an existing marker
+  const markerIntersects = raycaster.intersectObjects(placementMarkers);
+  if (markerIntersects.length > 0) {
+    // Remove clicked marker
+    const clickedMarker = markerIntersects[0].object;
+    const markerIndex = placementMarkers.indexOf(clickedMarker);
+    if (markerIndex !== -1) {
+      // Remove from scene and arrays
+      scene.remove(clickedMarker);
+      clickedMarker.geometry.dispose();
+      clickedMarker.material.dispose();
+      placementMarkers.splice(markerIndex, 1);
+      placementPoints.splice(markerIndex, 1);
+      
+      // Update UI
+      const isMolar = ['17','27','37','47'].includes(selectedToothId);
+      const needed  = isMolar ? 1 : 2;
+      const instr   = document.getElementById('placement-instructions');
+      const confirmBtn = document.getElementById('confirm-placement-btn');
+      
+      confirmBtn.disabled = placementPoints.length < needed;
+      
+      if (placementPoints.length === 0) {
+        instr.textContent = isMolar
+          ? '치아 중심 위치를 클릭하세요'
+          : '두 지점을 클릭하세요 (중앙에 배치됩니다)';
+      } else if (!isMolar && placementPoints.length === 1) {
+        instr.textContent = '두 번째 지점을 클릭하세요.';
+      }
+      
+      return;
+    }
+  }
+
   // Find the jaw mesh (the root mesh without userData.type)
   const jaw = scene.children.find(c => c.isMesh && !c.userData.type);
   if (!jaw) return;
@@ -160,11 +194,17 @@ function onMouseClick(event) {
   const hits = raycaster.intersectObject(jaw);
   if (hits.length === 0) return;
 
+  // Check if we've reached the maximum number of markers
+  const isMolar = ['17','27','37','47'].includes(selectedToothId);
+  const maxMarkers = isMolar ? 1 : 2;
+  if (placementPoints.length >= maxMarkers) {
+    return; // Don't add more markers if we already have enough
+  }
+
   const point = hits[0].point.clone();
   placementPoints.push(point);
   createMarker(point);
 
-  const isMolar = ['17','27','37','47'].includes(selectedToothId);
   const needed  = isMolar ? 1 : 2;
   const instr   = document.getElementById('placement-instructions');
   const confirmBtn = document.getElementById('confirm-placement-btn');
