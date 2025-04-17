@@ -198,7 +198,7 @@ function showSuccessMessage(toothId) {
 }
 
 /**
- * Create UI buttons for TransformControls
+ * Create UI buttons for TransformControls with custom uniform scaling
  */
 function createTransformUI() {
   if (document.getElementById('transform-ui')) return;
@@ -213,25 +213,115 @@ function createTransformUI() {
     padding: 8px;
     border-radius: 4px;
   `;
+  
+  // Create the basic transform UI buttons
   ui.innerHTML = `
     <button id="translate-btn">Move</button>
     <button id="rotate-btn">Rotate</button>
-    <button id="scale-btn">Scale</button>
-    <button id="detach-btn">Done</button>
+    <div id="scale-ui" style="margin-top: 8px; padding: 10px; background: rgba(0,0,0,0.05); border-radius: 4px;">
+      <label>Uniform Scale: <span id="scale-value">1.00</span></label>
+      <div style="display: flex; margin-top: 5px;">
+        <button id="scale-down-btn" style="flex: 1; margin-right: 4px;">-</button>
+        <button id="scale-up-btn" style="flex: 1;">+</button>
+      </div>
+      <input type="range" id="scale-slider" min="0.1" max="3" step="0.01" value="1" style="width: 100%; margin-top: 5px;">
+    </div>
+    <button id="detach-btn" style="margin-top: 8px; width: 100%;">Done</button>
   `;
+  
   document.body.appendChild(ui);
 
+  // Get the currently attached object
+  const getActiveObject = () => transformControls.object;
+  
+  // Store original scale for reset
+  let originalScale = new THREE.Vector3(1, 1, 1);
+  let currentScale = 1;
+  
+  // Save initial scale when control is attached
+  transformControls.addEventListener('objectChange', () => {
+    const object = getActiveObject();
+    if (object && !object.userData.initialScale) {
+      object.userData.initialScale = object.scale.clone();
+      originalScale = object.scale.clone();
+      currentScale = 1;
+      document.getElementById('scale-value').textContent = currentScale.toFixed(2);
+      document.getElementById('scale-slider').value = currentScale;
+    }
+  });
+
+  // Apply uniform scaling
+  function applyUniformScale(newScaleFactor) {
+    const object = getActiveObject();
+    if (!object) return;
+    
+    // Make sure we have the initial scale saved
+    if (!object.userData.initialScale) {
+      object.userData.initialScale = object.scale.clone();
+      originalScale = object.scale.clone();
+    }
+    
+    // Apply scaling uniformly to all axes
+    object.scale.set(
+      originalScale.x * newScaleFactor,
+      originalScale.y * newScaleFactor,
+      originalScale.z * newScaleFactor
+    );
+    
+    // Update UI
+    currentScale = newScaleFactor;
+    document.getElementById('scale-value').textContent = newScaleFactor.toFixed(2);
+    document.getElementById('scale-slider').value = newScaleFactor;
+  }
+  
+  // Set up event listeners
   document.getElementById('translate-btn')
     .addEventListener('click', () => transformControls.setMode('translate'));
+    
   document.getElementById('rotate-btn')
-    .addEventListener('click',    () => transformControls.setMode('rotate'));
-  document.getElementById('scale-btn')
-    .addEventListener('click',     () => transformControls.setMode('scale'));
+    .addEventListener('click', () => transformControls.setMode('rotate'));
+    
+  // Scale buttons
+  document.getElementById('scale-down-btn')
+    .addEventListener('click', () => {
+      const newScale = Math.max(0.1, currentScale - 0.01);
+      applyUniformScale(newScale);
+    });
+    
+  document.getElementById('scale-up-btn')
+    .addEventListener('click', () => {
+      const newScale = Math.min(3, currentScale + 0.01);
+      applyUniformScale(newScale);
+    });
+    
+  // Scale slider
+  document.getElementById('scale-slider')
+    .addEventListener('input', (e) => {
+      const newScale = parseFloat(e.target.value);
+      applyUniformScale(newScale);
+    });
+  
   document.getElementById('detach-btn')
-    .addEventListener('click',    () => {
+    .addEventListener('click', () => {
       transformControls.detach();
       ui.remove();
     });
+}
+
+// This function disables the scale gizmo in TransformControls
+function disableScaleMode() {
+  // Override the setMode method to prevent 'scale' mode
+  const originalSetMode = TransformControls.prototype.setMode;
+  TransformControls.prototype.setMode = function(mode) {
+    if (mode === 'scale') {
+      // Instead of entering scale mode, just stay in the current mode
+      // and notify the user that custom scaling should be used
+      console.log('Standard scale mode disabled. Please use the uniform scale controls.');
+      return;
+    }
+    // Call the original method for other modes
+    originalSetMode.call(this, mode);
+  };
 }
 
 // ----------------------------------------------------------------
@@ -299,6 +389,9 @@ function init() {
   transformControls.addEventListener('mouseDown', () => controls.enabled = false);
   transformControls.addEventListener('mouseUp',   () => controls.enabled = true);
   scene.add(transformControls.getHelper());
+  
+  // Disable standard scale mode
+  disableScaleMode();
 
   // matcaps setup
   matcaps['Clay']        = new THREE.TextureLoader().load('textures/B67F6B_4B2E2A_6C3A34_F3DBC6-256px.png');
