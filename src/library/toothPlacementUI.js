@@ -126,6 +126,9 @@ export function startToothPlacement(toothId, modelPath) {
   // Highlight selected tooth in chart
   highlightSelectedTooth(toothId);
   
+  // Keep orbit controls enabled to allow camera rotation
+  // (이전에는 컨트롤을 비활성화했지만, 이제 카메라 회전을 허용합니다)
+  
   // Show placement UI
   const placementUI = document.getElementById('placement-ui');
   const placementInstructions = document.getElementById('placement-instructions');
@@ -135,9 +138,9 @@ export function startToothPlacement(toothId, modelPath) {
   
   // Set instructions based on tooth number
   if (['17', '27', '37', '47'].includes(toothId)) {
-    placementInstructions.textContent = '치아 위치의 기준점을 클릭하세요';
+    placementInstructions.textContent = '치아 위치의 기준점을 클릭하세요 (치아 중심 위치)';
   } else {
-    placementInstructions.textContent = '빈 공간의 양쪽 치아 위치를 클릭하세요';
+    placementInstructions.textContent = '배치할 공간의 양쪽 지점을 클릭하세요 (중간에 치아가 배치됩니다)';
   }
   
   confirmButton.disabled = true;
@@ -187,9 +190,9 @@ function onMouseClick(event) {
     if (placementPoints.length === requiredPoints) {
       // Enable confirm button
       confirmButton.disabled = false;
-      placementInstructions.textContent = '위치 선정 완료. 확인 버튼을 클릭하세요.';
+      placementInstructions.textContent = '위치 선정 완료. 두 점 사이 중앙에 치아가 배치됩니다. 확인 버튼을 클릭하세요.';
     } else if (!isRearTooth && placementPoints.length === 1) {
-      placementInstructions.textContent = '두 번째 치아 위치를 클릭하세요';
+      placementInstructions.textContent = '두 번째 지점을 클릭하세요 (두 점 사이 중앙에 치아가 배치됩니다)';
     }
   }
 }
@@ -233,9 +236,11 @@ function calculatePlacementPosition() {
     return placementPoints[0].clone();
   } else {
     // For other teeth, calculate midpoint between two points
+    // This midpoint will be the center of the tooth model
     const midpoint = new THREE.Vector3();
     midpoint.addVectors(placementPoints[0], placementPoints[1]);
-    midpoint.multiplyScalar(0.5);
+    midpoint.multiplyScalar(0.5); // Divide by 2 to get the middle point
+    
     return midpoint;
   }
 }
@@ -282,10 +287,8 @@ function cleanupPlacement() {
   const placementUI = document.getElementById('placement-ui');
   placementUI.style.display = 'none';
   
-  // Re-enable orbit controls
-  if (controls) {
-    controls.enabled = true;
-  }
+  // Orbit controls were kept enabled throughout the process
+  // (이미 항상 활성화 상태로 유지됨)
 }
 
 /**

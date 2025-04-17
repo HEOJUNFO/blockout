@@ -205,16 +205,8 @@ function placeToothModel(toothId, modelPath, position) {
       const toothMesh = new THREE.Mesh(newGeometry, toothMaterial);
       
       // Position the tooth at the specified location
-      // Calculate vertical offset based on bounding box to ensure proper placement
-      const bbox = new THREE.Box3().setFromObject(toothMesh);
-      const height = bbox.max.y - bbox.min.y;
-      
-      // Set position (adjust Y position to place the bottom of the tooth at the clicked point)
-      toothMesh.position.set(
-        position.x,
-        position.y + (height/2), // Offset Y to align bottom with clicked point
-        position.z
-      );
+      // Simply place the center of the tooth model at the calculated center point
+      toothMesh.position.copy(position);
       
       // Add metadata to the mesh
       toothMesh.userData = {
@@ -423,8 +415,8 @@ function init() {
 function render() {
   requestAnimationFrame(render);
 
-  // Update OrbitControls (if not in placement mode)
-  if (controls ) {
+  // Always update OrbitControls, even in placement mode
+  if (controls) {
     controls.update();
   }
 
