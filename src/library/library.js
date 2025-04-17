@@ -11,7 +11,8 @@ import {
 
 // Import UI modules
 import { createDentalChartUI } from './dentalChartUI.js';
-import { initModelSelection } from './modelSelectionUI.js';
+import { initModelSelection, loadSTLModel } from './modelSelectionUI.js';
+import { initToothPlacement, isPlacementActive, addPlacedTooth } from './toothPlacementUI.js';
 
 // Raycast / BufferGeometry prototype extensions
 THREE.Mesh.prototype.raycast = acceleratedRaycast;
@@ -22,6 +23,7 @@ THREE.BufferGeometry.prototype.disposeBoundsTree = disposeBoundsTree;
 let scene, camera, renderer, controls;
 let targetMesh = null;
 let material = false;
+let placedTeeth = [];
 
 // Sculpt parameters
 const params = {
@@ -106,6 +108,177 @@ export function setTargetMeshGeometry(geometry) {
 
   // (4) Adjust camera and controls after model is placed in scene
   fitCameraToObject(camera, targetMesh);
+}
+
+/**
+ * Place a tooth model at a specific position
+ * @param {string} toothId - The tooth ID
+ * @param {string} modelPath - Path to the STL model
+ * @param {THREE.Vector3} position - Position to place the tooth
+ */
+function placeToothModel(toothId, modelPath, position) {
+  console.log(`Placing tooth ${toothId} at position:`, position);
+  
+  const loader = new STLLoader();
+  
+  // Show loading message
+  const loadingMessage = document.createElement('div');
+  loadingMessage.id = 'placement-loading';
+  loadingMessage.style.cssText = `
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    background-color: rgba(0, 0, 0, 0.7);
+    color: white;
+    padding: 20px;
+    border-radius: 10px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    z-index: 2000;
+  `;
+  loadingMessage.innerHTML = `
+    <div class="loading-spinner"></div>
+    <p>${toothId}번 치아 모델을 배치 중입니다...</p>
+  `;
+  document.body.appendChild(loadingMessage);
+  
+  loader.load(
+    modelPath,
+    (geometry) => {
+      // Process on successful load
+      const positionAttr = geometry.getAttribute('position');
+      if (!positionAttr) {
+        console.error('BufferGeometry has no position attribute.');
+        document.getElementById('placement-loading').remove();
+        return;
+      }
+      const positions = positionAttr.array;
+
+      const indices = [];
+      for (let i = 0; i < positions.length / 3; i += 3) {
+        indices.push(i, i + 1, i + 2);
+      }
+
+      // Create new BufferGeometry
+      let newGeometry = new THREE.BufferGeometry();
+
+      // Register position attribute
+      newGeometry.setAttribute(
+        'position',
+        new THREE.Float32BufferAttribute(positions, 3)
+      );
+
+      // Set indices
+      newGeometry.setIndex(
+        new THREE.Uint32BufferAttribute(indices, 1)
+      );
+
+      // Process the geometry (but preserve original size)
+      newGeometry.deleteAttribute('uv');
+      newGeometry = BufferGeometryUtils.mergeVertices(newGeometry);
+      newGeometry.computeVertexNormals();
+      
+      // Scale the geometry to a reasonable size
+      newGeometry.computeBoundingSphere();
+      if (newGeometry.boundingSphere) {
+        const radius = newGeometry.boundingSphere.radius;
+        const scaleFactor = 0.2 / radius; // Scale to fixed size
+        newGeometry.scale(scaleFactor, scaleFactor, scaleFactor);
+      }
+      
+      // Center the geometry completely in all axes
+      newGeometry.center();
+      
+      // Calculate bounding box to properly position the model
+      newGeometry.computeBoundingBox();
+      
+      // Create a unique material for this tooth using the current matcap
+      const toothMaterial = new THREE.MeshMatcapMaterial({
+        flatShading: params.flatShading,
+        side: THREE.DoubleSide,
+        matcap: matcaps[params.matcap]
+      });
+      
+      // Create mesh
+      const toothMesh = new THREE.Mesh(newGeometry, toothMaterial);
+      
+      // Position the tooth at the specified location
+      // Calculate vertical offset based on bounding box to ensure proper placement
+      const bbox = new THREE.Box3().setFromObject(toothMesh);
+      const height = bbox.max.y - bbox.min.y;
+      
+      // Set position (adjust Y position to place the bottom of the tooth at the clicked point)
+      toothMesh.position.set(
+        position.x,
+        position.y + (height/2), // Offset Y to align bottom with clicked point
+        position.z
+      );
+      
+      // Add metadata to the mesh
+      toothMesh.userData = {
+        type: 'placedTooth',
+        toothId: toothId,
+        modelPath: modelPath
+      };
+      
+      // Add to scene
+      scene.add(toothMesh);
+      
+      // Track the placed tooth
+      placedTeeth.push(toothMesh);
+      addPlacedTooth(toothMesh);
+      
+      // Remove loading message
+      document.getElementById('placement-loading').remove();
+      
+      // Show success message
+      showSuccessMessage(toothId);
+    },
+    // Load progress
+    (xhr) => {
+      console.log((xhr.loaded / xhr.total * 100) + '% loaded');
+    },
+    // Load error
+    (error) => {
+      console.error('STL load error:', error);
+      document.getElementById('placement-loading').remove();
+      alert(`모델을 로드할 수 없습니다: ${modelPath}`);
+    }
+  );
+}
+
+/**
+ * Show success message after placing tooth
+ * @param {string} toothId - The placed tooth ID
+ */
+function showSuccessMessage(toothId) {
+  const messageElement = document.createElement('div');
+  messageElement.style.cssText = `
+    position: fixed;
+    top: 20px;
+    left: 50%;
+    transform: translateX(-50%);
+    background-color: rgba(76, 175, 80, 0.9);
+    color: white;
+    padding: 12px 20px;
+    border-radius: 8px;
+    font-weight: bold;
+    z-index: 2000;
+    transition: opacity 0.5s;
+  `;
+  messageElement.textContent = `${toothId}번 치아가 성공적으로 배치되었습니다.`;
+  
+  document.body.appendChild(messageElement);
+  
+  // Remove after 3 seconds
+  setTimeout(() => {
+    messageElement.style.opacity = '0';
+    setTimeout(() => {
+      messageElement.remove();
+    }, 500);
+  }, 3000);
 }
 
 // ----------------------------------------------------------------
@@ -239,17 +412,34 @@ function init() {
   
   // Initialize model selection functionality
   initModelSelection(stlLoader, setTargetMeshGeometry);
+  
+  // Initialize tooth placement functionality
+  initToothPlacement(scene, camera, renderer, controls);
+  
+  // Make placeToothModel available globally
+  window.placeToothModel = placeToothModel;
 }
 
 function render() {
   requestAnimationFrame(render);
 
-  // Update OrbitControls (apply in next frame)
-  if (controls) {
+  // Update OrbitControls (if not in placement mode)
+  if (controls && !isPlacementActive()) {
     controls.update();
   }
 
-  material.matcap = matcaps[params.matcap];
+  // Update all materials to use current matcap
+  if (targetMesh) {
+    targetMesh.material.matcap = matcaps[params.matcap];
+  }
+  
+  // Update placed teeth materials
+  placedTeeth.forEach(tooth => {
+    if (tooth.material) {
+      tooth.material.matcap = matcaps[params.matcap];
+    }
+  });
+  
   renderer.render(scene, camera);
 }
 

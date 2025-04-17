@@ -2,6 +2,7 @@
 import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js';
 import * as THREE from 'three';
 import { highlightSelectedTooth } from './dentalChartUI.js';
+import { startToothPlacement } from './toothPlacementUI.js';
 
 // Module variables
 let stlLoader;
@@ -35,13 +36,28 @@ export function initModelSelection(loader, setGeometryFn) {
     .ui-header {
       display: flex;
       flex-direction: column;
-      margin-bottom: 15px;
+      margin-bottom: 10px;
     }
     .ui-header h3 {
       margin: 0;
       font-size: 18px;
       color: #333;
       text-align: center;
+    }
+    .ui-actions {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 15px;
+      margin-top: 10px;
+    }
+    .ui-actions button {
+      padding: 8px 12px;
+      border: none;
+      border-radius: 5px;
+      cursor: pointer;
+      font-weight: bold;
+      transition: background-color 0.2s;
     }
     .models-list {
       display: flex;
@@ -90,19 +106,26 @@ export function initModelSelection(loader, setGeometryFn) {
       font-size: 12px;
       color: #666;
     }
-    .ui-footer {
-      display: flex;
-      justify-content: flex-end;
+    /* ui-footer 클래스 제거 - ui-actions로 대체함 */
+    #place-model-btn {
+      background-color: #4caf50;
+      color: white;
+      flex: 1;
+    }
+    #place-model-btn:hover {
+      background-color: #45a049;
+    }
+    #load-model-btn {
+      background-color: #2196F3;
+      color: white;
+      flex: 1;
+    }
+    #load-model-btn:hover {
+      background-color: #1e88e5;
     }
     #cancel-model-btn {
-      padding: 8px 12px;
-      border: none;
-      border-radius: 5px;
-      cursor: pointer;
-      font-weight: bold;
       background-color: #f5f5f5;
       color: #333;
-      transition: background-color 0.2s;
     }
     #cancel-model-btn:hover {
       background-color: #e0e0e0;
@@ -288,11 +311,13 @@ function showModelSelectionUI(toothId, availableModels) {
     <div class="ui-header">
       <h3>${toothId}번 치아 모델 선택</h3>
     </div>
+    <div class="ui-actions">
+      <button id="place-model-btn">위치 지정</button>
+      <button id="load-model-btn">바로 로드</button>
+      <button id="cancel-model-btn">취소</button>
+    </div>
     <div class="models-list">
       ${modelsListHTML}
-    </div>
-    <div class="ui-footer">
-      <button id="cancel-model-btn">취소</button>
     </div>
   `;
   
@@ -308,11 +333,31 @@ function showModelSelectionUI(toothId, availableModels) {
       
       // Highlight new selection
       item.classList.add('selected');
-      
-      // Load and display model
-      const modelPath = item.getAttribute('data-path');
-      loadSTLModel(modelPath);
     });
+  });
+  
+  // Place button event - 새로 추가
+  document.getElementById('place-model-btn').addEventListener('click', () => {
+    const selectedItem = document.querySelector('.model-item.selected');
+    if (selectedItem) {
+      const modelPath = selectedItem.getAttribute('data-path');
+      selectionUI.remove();
+      startToothPlacement(toothId, modelPath);
+    } else {
+      alert('모델을 선택해주세요.');
+    }
+  });
+  
+  // Load button event
+  document.getElementById('load-model-btn').addEventListener('click', () => {
+    const selectedItem = document.querySelector('.model-item.selected');
+    if (selectedItem) {
+      const modelPath = selectedItem.getAttribute('data-path');
+      selectionUI.remove();
+      loadSTLModel(modelPath);
+    } else {
+      alert('모델을 선택해주세요.');
+    }
   });
   
   // Cancel button event
@@ -320,9 +365,8 @@ function showModelSelectionUI(toothId, availableModels) {
     selectionUI.remove();
   });
   
-  // Automatically load first model (preview)
+  // Automatically select first model
   if (availableModels.length > 0) {
-    loadSTLModel(availableModels[0].path);
     document.querySelector('.model-item').classList.add('selected');
   }
 }
@@ -331,7 +375,7 @@ function showModelSelectionUI(toothId, availableModels) {
  * Load and display an STL model
  * @param {string} modelPath - Path to the STL model
  */
-function loadSTLModel(modelPath) {
+export function loadSTLModel(modelPath) {
   const loader = new STLLoader();
   
   loader.load(
