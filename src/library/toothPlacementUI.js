@@ -280,23 +280,102 @@ function onMouseClick(event) {
   const isMolar = [17, 27, 37, 47].includes(parseInt(selectedToothId));
   
   if (isMolar) {
-    // 대구치는 즉시 프리뷰 생성
+    // 대구치는 즉시 프리뷰 생성 (드래그 및 회전 가능)
     createPreviewTooth(point);
   } else {
-    // 일반 치아는 기존 방식 유지
+    // 일반 치아는 두 지점 클릭으로 마커 생성
     placementPoints.push(point);
     createMarker(point);
     
     if (placementPoints.length === 2) {
-      const midpoint = new THREE.Vector3()
-        .addVectors(placementPoints[0], placementPoints[1])
-        .multiplyScalar(0.5);
-      
-      createPreviewTooth(midpoint);
+      // 비대구치는 프리뷰 없이 바로 확인 버튼만 활성화
+      document.getElementById('placement-instructions').textContent = 
+        '위치가 올바르면 확인 버튼을 클릭하세요';
+      document.getElementById('confirm-placement-btn').disabled = false;
     } else {
       document.getElementById('placement-instructions').textContent = '두 번째 지점을 클릭하세요.';
     }
   }
+}
+
+/**
+ * 비대구치를 위한 간단한 프리뷰 생성 (드래그, 회전 기능 없음)
+ */
+function createSimplePreview(position) {
+  // 로딩 메시지 표시
+  const loadingMessage = document.createElement('div');
+  loadingMessage.id = 'preview-loading';
+  loadingMessage.style.cssText = `
+    position: fixed; top: 50%; left: 50%;
+    transform: translate(-50%, -50%);
+    background: rgba(0,0,0,0.7);
+    color: #fff; padding: 20px; border-radius: 10px;
+    z-index: 2000;
+  `;
+  loadingMessage.innerHTML = `
+    <div class="loading-spinner"></div>
+    <p>${selectedToothId}번 치아 미리보기를 생성 중입니다...</p>
+  `;
+  document.body.appendChild(loadingMessage);
+  
+  // STL 로드
+  const loader = new STLLoader();
+  loader.load(
+    selectedModelPath,
+    (geometry) => {
+      const posAttr = geometry.getAttribute('position');
+      if (!posAttr) {
+        console.error('No position attribute.');
+        loadingMessage.remove();
+        return;
+      }
+      
+      geometry.computeVertexNormals();
+      geometry.computeBoundingSphere();
+      if (geometry.boundingSphere) {
+        const radius = geometry.boundingSphere.radius;
+        geometry.scale(0.2 / radius, 0.2 / radius, 0.2 / radius);
+      }
+      geometry.center();
+      
+      // 프리뷰용 반투명 재질 생성
+      previewMaterial = new THREE.MeshStandardMaterial({
+        color: 0x3399ff,
+        transparent: true,
+        opacity: 0.7,
+        metalness: 0.1,
+        roughness: 0.8,
+        side: THREE.DoubleSide
+      });
+      
+      // 프리뷰 치아 생성
+      previewTooth = new THREE.Mesh(geometry, previewMaterial);
+      previewTooth.position.copy(position);
+      previewTooth.userData = { type: 'previewTooth', toothId: selectedToothId };
+      
+      // 기본 회전 설정
+      setInitialRotation(previewTooth);
+      
+      // 씬에 추가
+      scene.add(previewTooth);
+      
+      // UI 업데이트 (슬라이더 없이)
+      document.getElementById('placement-instructions').textContent = 
+        '위치가 올바르면 확인 버튼을 클릭하세요';
+      document.getElementById('confirm-placement-btn').disabled = false;
+      
+      // 로딩 메시지 제거
+      loadingMessage.remove();
+    },
+    (xhr) => {
+      // 로딩 진행 상황
+    },
+    (error) => {
+      console.error('STL 로드 오류:', error);
+      loadingMessage.remove();
+      alert('치아 모델을 로드할 수 없습니다.');
+    }
+  );
 }
 
 /**
@@ -511,6 +590,10 @@ function cleanupPreviewTooth() {
 function onMouseDown(event) {
   if (!placementActive || !previewTooth) return;
   
+  // 대구치 (17, 27, 37, 47)인지 확인
+  const isMolar = [17, 27, 37, 47].includes(parseInt(selectedToothId));
+  if (!isMolar) return; // 비대구치는 드래그/회전 불가
+  
   // Convert to normalized device coords
   const rect = renderer.domElement.getBoundingClientRect();
   mouse.x = ((event.clientX - rect.left)/rect.width)*2 - 1;
@@ -556,6 +639,10 @@ function onMouseDown(event) {
  */
 function onMouseMove(event) {
   if (!placementActive || (!isDragging && !isRotating)) return;
+  
+  // 대구치 (17, 27, 37, 47)인지 확인
+  const isMolar = [17, 27, 37, 47].includes(parseInt(selectedToothId));
+  if (!isMolar) return; // 비대구치는 드래그/회전 불가
   
   // Convert to normalized device coords
   const rect = renderer.domElement.getBoundingClientRect();
@@ -625,19 +712,63 @@ function onMouseUp() {
  * User confirms placement → calls global placeToothModel
  */
 function confirmPlacement() {
-  if (!placementActive || !previewTooth) return;
+  if (!placementActive) return;
 
-  // 최종 배치를 위해 프리뷰의 위치와 회전값 사용
-  const finalPosition = previewTooth.position.clone();
-  const finalRotation = previewTooth.rotation.clone();
+  const isMolar = [17, 27, 37, 47].includes(parseInt(selectedToothId));
   
-  // 프리뷰 제거
-  cleanupPreviewTooth();
-  clearPlacementMarkers();
-  
-  // 글로벌 배치 함수 호출
-  if (window.placeToothModel) {
-    window.placeToothModel(selectedToothId, selectedModelPath, finalPosition, finalRotation);
+  // 프리뷰가 있는 경우 (대구치)
+  if (previewTooth) {
+    // 최종 배치를 위해 프리뷰의 위치와 회전값 사용
+    const finalPosition = previewTooth.position.clone();
+    const finalRotation = previewTooth.rotation.clone();
+    
+    // 프리뷰 제거
+    cleanupPreviewTooth();
+    clearPlacementMarkers();
+    
+    // 글로벌 배치 함수 호출
+    if (window.placeToothModel) {
+      window.placeToothModel(selectedToothId, selectedModelPath, finalPosition, finalRotation);
+    }
+  } 
+  // 프리뷰가 없는 경우 (비대구치)
+  else if (placementPoints.length === 2) {
+    // 두 점의 중간 계산
+    const midpoint = new THREE.Vector3()
+      .addVectors(placementPoints[0], placementPoints[1])
+      .multiplyScalar(0.5);
+    
+    // 기본 회전값 계산
+    const rotation = new THREE.Euler();
+    const toothId = parseInt(selectedToothId);
+    
+    // Y축 기준으로 회전값 설정
+    let yRotation = 0;
+    
+    // 치아 번호에 따른 기본 회전각 설정
+    if (toothId >= 11 && toothId <= 18) {
+      // 우측 상악
+      yRotation = Math.PI;
+    } else if (toothId >= 21 && toothId <= 28) {
+      // 좌측 상악
+      yRotation = 0;
+    } else if (toothId >= 31 && toothId <= 38) {
+      // 좌측 하악
+      yRotation = 0;
+    } else if (toothId >= 41 && toothId <= 48) {
+      // 우측 하악
+      yRotation = Math.PI;
+    }
+    
+    rotation.set(0, yRotation, 0);
+    
+    // 마커 제거
+    clearPlacementMarkers();
+    
+    // 글로벌 배치 함수 호출
+    if (window.placeToothModel) {
+      window.placeToothModel(selectedToothId, selectedModelPath, midpoint, rotation);
+    }
   }
   
   cleanupPlacement();
