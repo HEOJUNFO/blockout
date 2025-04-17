@@ -92,10 +92,16 @@ export function setTargetMeshGeometry(geometry) {
 }
 
 /**
- * Place a tooth model at a specific position
+ * Place a tooth model at a specific position with rotation
+ * @param {string} toothId - The tooth ID
+ * @param {string} modelPath - Path to the STL model
+ * @param {THREE.Vector3} position - Position to place the tooth
+ * @param {THREE.Euler} rotation - Optional rotation for the tooth
  */
-function placeToothModel(toothId, modelPath, position) {
+function placeToothModel(toothId, modelPath, position, rotation) {
   console.log(`Placing tooth ${toothId} at position:`, position);
+  if (rotation) console.log(`With rotation:`, rotation);
+  
   const loader = new STLLoader();
 
   // loading overlay
@@ -152,6 +158,12 @@ function placeToothModel(toothId, modelPath, position) {
 
       const toothMesh = new THREE.Mesh(newGeometry, toothMaterial);
       toothMesh.position.copy(position);
+      
+      // Apply rotation if provided
+      if (rotation) {
+        toothMesh.rotation.copy(rotation);
+      }
+      
       toothMesh.userData = { type: 'placedTooth', toothId, modelPath };
 
       scene.add(toothMesh);
