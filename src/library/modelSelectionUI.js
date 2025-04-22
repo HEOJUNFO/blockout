@@ -176,14 +176,6 @@ export function initModelSelection(loader, setGeometryFn) {
     #place-model-btn:hover {
       background-color: #45a049;
     }
-    #load-model-btn {
-      background-color: #2196F3;
-      color: white;
-      flex: 1;
-    }
-    #load-model-btn:hover {
-      background-color: #1e88e5;
-    }
     #cancel-model-btn {
       background-color: #f5f5f5;
       color: #333;
@@ -532,7 +524,6 @@ function showModelSelectionUI(toothId, availableModels) {
     
     <div class="ui-actions">
       <button id="place-model-btn">위치 지정</button>
-      <button id="load-model-btn">바로 로드</button>
       <button id="cancel-model-btn">취소</button>
     </div>
     <div class="models-list">
@@ -574,22 +565,6 @@ function showModelSelectionUI(toothId, availableModels) {
       cleanupPreview();
       
       startToothPlacement(toothId, modelPath);
-    } else {
-      alert('모델을 선택해주세요.');
-    }
-  });
-  
-  // Load button event
-  document.getElementById('load-model-btn').addEventListener('click', () => {
-    const selectedItem = document.querySelector('.model-item.selected');
-    if (selectedItem) {
-      const modelPath = selectedItem.getAttribute('data-path');
-      selectionUI.remove();
-      
-      // 프리뷰 리소스 정리
-      cleanupPreview();
-      
-      loadSTLModel(modelPath);
     } else {
       alert('모델을 선택해주세요.');
     }
