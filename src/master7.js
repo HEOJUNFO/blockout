@@ -912,7 +912,7 @@ function init() {
         let newGeometry = new THREE.BufferGeometry();
         newGeometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
         newGeometry.setIndex(new THREE.Uint32BufferAttribute(indices, 1));
-        setTargetMeshGeometry(newGeometry);
+        setTargetMeshGeometry(geometry);
       }, false);
       reader.readAsArrayBuffer(file);
     }

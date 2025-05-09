@@ -14,6 +14,7 @@ THREE.BufferGeometry.prototype.disposeBoundsTree = disposeBoundsTree;
 let stats, scene, camera, renderer, controls;
 let targetMesh = null;
 let originalMesh = null;   // 원본 메시 저장
+
 let undercutMesh = null; 
 let material;
 let savedCameraState = null;  // 카메라 상태 저장
